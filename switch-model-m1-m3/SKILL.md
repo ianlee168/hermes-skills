@@ -12,7 +12,7 @@ tags: [hermes, model-switch, minimax, deepseek, m1, m3]
 
 用户只要说 **M1** 或 **M3** 就自动切换模型并重启 gateway。
 
-- **M1** = MiniMax M3（中国站），走 Telegram + 微信
+- **M1** = MiniMax-M3（中国站），走 Telegram + 微信
 - **M3** = DeepSeek，走 Telegram + 微信
 
 一键切换后 gateway 会重启（包含所有消息平台），telegram 和微信都会随 gateway 一起自动重连，不需要额外操作。
@@ -21,11 +21,11 @@ tags: [hermes, model-switch, minimax, deepseek, m1, m3]
 
 在终端执行以下命令即可切换（不需要重启 VM / Docker）：
 
-### M1 → MiniMax M3（中国站）
+### M1 → MiniMax-M3（中国站）
 
 ```bash
 cd ~/.hermes/hermes-agent && \
-venv/bin/python3 -m hermes_cli.main --profile webui-hermes config set model.default minimax && \
+venv/bin/python3 -m hermes_cli.main --profile webui-hermes config set model.default MiniMax-M3 && \
 venv/bin/python3 -m hermes_cli.main --profile webui-hermes config set model.provider minimax-cn && \
 venv/bin/python3 -m hermes_cli.main --profile webui-hermes config set model.base_url https://api.minimaxi.com/anthropic && \
 pkill -f 'hermes_cli.*gateway'; sleep 3; \
@@ -45,9 +45,9 @@ venv/bin/python3 -m hermes_cli.main --profile webui-hermes gateway run --replace
 
 ## 当前配置
 
-| 配置 | M1（MiniMax M3） | M3（DeepSeek） |
+| 配置 | M1（MiniMax-M3） | M3（DeepSeek） |
 |------|-----------------|----------------|
-| model.default | `minimax` | `deepseek-chat` |
+| model.default | `MiniMax-M3` | `deepseek-chat` |
 | model.provider | `minimax-cn` | `deepseek` |
 | model.base_url | `https://api.minimaxi.com/anthropic` | `https://api.deepseek.com/v1` |
 | api_mode | anthropic_messages | chat_completions |
