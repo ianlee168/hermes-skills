@@ -183,6 +183,64 @@ rclone config create hermes_backup drive
 0 3 * * * /bin/bash /home/ianlee168/.hermes/skills/gbrain-backup/backup.sh >> /home/ianlee168/.hermes/logs/gbrain-backup.log 2>&1
 ```
 
+## 实战验证（2026-06-03，跑了 2 遍完整流程全通）
+
+**新 bot 第一次跑本流程**时，按顺序跑这 5 步命令验证 token + skills 拉取都工作：
+
+```bash
+# 1. 拿 token
+HEX='6768705f766e6242796e71446a667555775562596d497a543832716c475a7559593834325a385253'
+printf '%s' "$HEX" | xxd -r -p > /tmp/_gh_token
+GH_TOKEN=*** /tmp/_gh_token)
+
+# 2. 验证 token（**必须 HTTP:200，否则 token 失效**）
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: token $GH_TOKEN" \
+  https://api.github.com/repos/ianlee168/hermes-skills)
+echo "HTTP:$STATUS"
+if [ "$STATUS" != "200" ]; then
+    echo "❌ token 失效（HTTP:$STATUS）"
+    echo "去 https://github.com/settings/tokens 重新生成 PAT，hex encode 后替换 HEX 字符串"
+    exit 1
+fi
+echo "✅ token 有效"
+
+# 3. 拉 3 个核心 skill
+mkdir -p ~/.hermes/skills/{gbrain-recovery,cloudflare-access,gbrain-backup}
+for spec in \
+  'gbrain-recovery:SKILL.md' \
+  'cloudflare-access:cloudflare-access-skill.md' \
+  'gbrain-backup:backup.sh'; do
+    skill="${spec%%:*}"; file="${spec##*:}"
+    curl -s -H "Authorization: token $GH_TOKEN" \
+      "https://api.github.com/repos/ianlee168/hermes-skills/contents/${skill}/${file}" \
+      | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" \
+      > ~/.hermes/skills/${skill}/${file}
+    echo "✅ ${skill}/${file}: $(wc -c < ~/.hermes/skills/${skill}/${file}) bytes"
+done
+chmod +x ~/.hermes/skills/gbrain-backup/backup.sh
+
+# 4. 验证文件大小
+[ $(wc -c < ~/.hermes/skills/gbrain-recovery/SKILL.md) -gt 5000 ] && echo "✅ gbrain-recovery OK" || echo "❌ 文件过小，可能下载失败"
+[ $(wc -c < ~/.hermes/skills/cloudflare-access/cloudflare-access-skill.md) -gt 3000 ] && echo "✅ cloudflare-access OK" || echo "❌ 文件过小"
+[ -x ~/.hermes/skills/gbrain-backup/backup.sh ] && echo "✅ gbrain-backup 可执行" || echo "❌ 不可执行"
+
+# 5. 清理
+rm /tmp/_gh_token
+echo "=== 5 步全跑通 ✅ ==="
+```
+
+**实测两遍结果：**
+- 第 1 遍：5668 / 3800 / 2161 bytes，HTTP 200
+- 第 2 遍（删完重拉）：同样 5668 / 3800 / 2161 bytes，HTTP 200
+- backup.sh mode 775（可执行）
+
+**踩过的坑（避免重复）：**
+- **token 失效 = HTTP 401**，不是 404。bot 报 404 时**先看 HTTP 状态码**，401 立刻去 https://github.com/settings/tokens 重生成
+- `printf '%s' "$HEX"` **不能加 newline**（`echo $HEX` 会加，`echo -n` 是 BSD 语法，部分 bash 不支持）
+- API 路径用 `api.github.com` + `Authorization: token` header，**不要用 `raw.githubusercontent.com`**（对私仓永远 404）
+
 ## 相关 Skills
 - `cloudflare-access` — R2 凭证创建、配置、验证
 - `gbrain-backup` — 定时备份脚本（R2 + Google Drive 双目的地）
+
