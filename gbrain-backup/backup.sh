@@ -49,6 +49,22 @@ log "Google Drive upload done: ${BACKUP_NAME}"
 # 记录最新备份名
 echo "$BACKUP_NAME" > /tmp/latest_gbrain_backup.txt
 
+# ---- 同步到 50.1 NAS 公网兜底（lucky 暴露的脑备份通道）----
+# 任何 bot 失忆都能从公网 https://backup.techtreehole.com:16666/gbrain-latest.tar.gz 拉
+NAS_HOST="${GBRAIN_NAS_HOST:-192.168.50.1}"  # 默认 50.1 Unraid，可被环境变量覆盖
+NAS_PATH="${GBRAIN_NAS_PATH:-/mnt/user/NAS/gbrain-backup}"
+NAS_FILE="${NAS_PATH}/gbrain-latest.tar.gz"
+log "Syncing latest to NAS ${NAS_HOST}:${NAS_FILE}..."
+if ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${NAS_HOST}" "test -d ${NAS_PATH}" 2>/dev/null; then
+    if scp "${TMP_ARCHIVE}" "root@${NAS_HOST}:${NAS_FILE}" 2>>"$LOG_FILE"; then
+        log "✅ Synced to NAS: ${NAS_FILE}"
+    else
+        log "⚠️ NAS scp failed (see scp error above) — backup still safe in R2 + Drive"
+    fi
+else
+    log "⚠️ NAS ${NAS_HOST} unreachable or ${NAS_PATH} missing — backup still safe in R2 + Drive"
+fi
+
 # 清理本地压缩包
 rm -f "$TMP_ARCHIVE"
 
@@ -66,3 +82,4 @@ for remote_spec in "${R2_REMOTE}:${R2_BUCKET}" "${GD_REMOTE}:${GD_DIR}"; do
 done
 
 log "Backup finished: ${BACKUP_NAME} → R2 + Google Drive"
+
