@@ -258,7 +258,95 @@ chmod +x "$SKILL_DIR/gbrain-backup/backup.sh"
 
 ### 4. 恢复 gbrain 记忆
 
-**先看 R2 有什么备份：**
+#### 4a. **先把脑备份传到你这台机器**（关键前置）
+
+**R2 / Drive 都在远端，本机没 rclone 凭据就直接拉不动。** 必须先把 tar.gz 传到你这台机器。
+
+**5 种传法（按可行性排）：**
+
+##### 方法 1：公网临时托管（最省事，50.110 / Windows bot 友好）
+
+在**有脑的机器**（50.161 真机）跑：
+```bash
+# 打包 PGlite 数据目录
+cd <brain-data-parent-dir>  # 取决于有脑机器怎么放
+tar -czf /tmp/gbrain-to-transfer.tar.gz brain.pglite/
+
+# 上传到公网临时托管（无需账号）
+curl --upload-file /tmp/gbrain-to-transfer.tar.gz https://transfer.sh/gbrain-to-transfer.tar.gz
+# 拿到 URL，类似：https://transfer.sh/xxx/gbrain-to-transfer.tar.gz
+```
+
+**在目标机器**（bot 这台）跑：
+```bash
+mkdir -p "$GBRAIN_DIR"
+curl -o "$GBRAIN_DIR/gbrain-to-transfer.tar.gz" "<URL_从_有脑机器拿>"
+cd "$GBRAIN_DIR" && tar -xzf gbrain-to-transfer.tar.gz
+```
+
+**优点**：无需 SSH、无需 rclone、无需公网 IP。**缺点**：临时 URL 7 天失效（transfer.sh） / 24 小时（0x0.st）。
+
+##### 方法 2：scp 跨机（需 SSH 通）
+
+**前提**：bot 跟有脑机器同内网 / 有 SSH 访问。
+
+**在目标机器**（bot 这台）跑：
+```bash
+mkdir -p "$GBRAIN_DIR"
+# 从有脑机器拉（替换 <user> 和 <有脑机器-IP>）
+scp <user>@<有脑机器-IP>:<brain-pglite-parent-dir>/brain.pglite/ -r "$GBRAIN_DIR/"
+# 或：拉 tar.gz
+scp <user>@<有脑机器-IP>:/tmp/gbrain-to-transfer.tar.gz "$GBRAIN_DIR/"
+```
+
+**优点**：直接、内网快。**缺点**：需 SSH 凭据 + bot 跟有脑机器通。
+
+##### 方法 3：HTTP 服务直传（50.161 启服务，50.110 拉）
+
+**在有脑机器**跑：
+```bash
+cd <brain-pglite-parent-dir>
+tar -czf /tmp/gbrain-to-transfer.tar.gz brain.pglite/
+cd /tmp && python3 -m http.server 8888
+# 防火墙开 8888 端口
+```
+
+**在目标机器**跑：
+```bash
+curl -o "$GBRAIN_DIR/gbrain-to-transfer.tar.gz" "http://<有脑机器-IP>:8888/gbrain-to-transfer.tar.gz"
+```
+
+**优点**：无需 SSH。**缺点**：需防火墙开端口，跨公网不安全。
+
+##### 方法 4：GitHub Release（适合大文件 + 长期保留）
+
+在有脑机器跑：
+```bash
+cd <brain-pglite-parent-dir>
+tar -czf /tmp/gbrain-to-transfer.tar.gz brain.pglite/
+
+# 用 gh CLI 上传 Release
+gh release create gbrain-snapshot-$(date +%Y%m%d) /tmp/gbrain-to-transfer.tar.gz \
+    --repo ianlee168/hermes-skills --title "Brain Snapshot" --notes "auto-generated"
+# 拿到 Release URL
+```
+
+在目标机器：
+```bash
+curl -L -o "$GBRAIN_DIR/gbrain-to-transfer.tar.gz" \
+  "https://github.com/ianlee168/hermes-skills/releases/latest/download/gbrain-to-transfer.tar.gz"
+```
+
+**优点**：长期保留、GitHub 加速、6 GB 上限（够 50 GB 脑）。**缺点**：要 gh CLI + 仓 public。
+
+##### 方法 5：base64 编码粘贴（小数据可，超 12 MB 不现实）
+
+脑备份 12-15 MB，base64 编码后 16-20 MB，**chat 粘不进去**。**不推荐**，仅作"完全断网"应急。
+
+#### 4b. 看 R2 / Drive 有什么备份（如果你有 rclone 凭据）
+
+**前提：本机 rclone 已配 `gbrain_r2` 和 `hermes_backup` 两个 remote**（`rclone config file` 查路径，`rclone listremotes` 列出现有 remote）。如未配，参见 `cloudflare-access` skill 创 R2 token + `rclone config`。
+
 ```bash
 # 列 R2 上 1 年内的 gbrain 备份
 rclone ls gbrain_r2:huawei-car-raw/ --max-age 1y | grep gbrain-
@@ -266,8 +354,6 @@ rclone ls gbrain_r2:huawei-car-raw/ --max-age 1y | grep gbrain-
 # 列 Drive 上的备份
 rclone ls hermes_backup:hermes-gbrain-backup/ --max-age 1y | grep gbrain-
 ```
-
-**前提：本机 rclone 已配 `gbrain_r2` 和 `hermes_backup` 两个 remote**（`rclone config file` 查路径，`rclone listremotes` 列出现有 remote）。如未配，参见 `cloudflare-access` skill 创 R2 token + `rclone config`。
 
 **下载 + 解压：**
 ```bash
