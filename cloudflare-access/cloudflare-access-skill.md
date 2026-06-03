@@ -11,7 +11,7 @@ description: Cloudflare R2 对象存储授权完整流程 — 登录、创建 AP
 | 项目 | 值 |
 |------|-----|
 | 登录邮箱 | ianlee168@gmail.com |
-| Global API Key | 31ec98d888ee6fe50e98a5f636f40c4e8ecb4 |
+| Global API Key | <GLOBAL_API_KEY_从_dashboard_获取> |
 | Account ID | 8bc8658cbb45f90275fd62d411b35723 |
 | R2 Bucket | huawei-car-raw |
 | R2 Endpoint | https://8bc8658cbb45f90275fd62d411b35723.r2.cloudflarestorage.com |
@@ -45,7 +45,7 @@ import urllib.request, json, hashlib
 
 headers = {
     'X-Auth-Email': 'ianlee168@gmail.com',
-    'X-Auth-Key': '31ec98d888ee6fe50e98a5f636f40c4e8ecb4',
+    'X-Auth-Key': '<GLOBAL_API_KEY_从_dashboard_获取>',
     'Content-Type': 'application/json'
 }
 
@@ -128,3 +128,4 @@ A: 检查 token 是否有 R2 Storage Read/Write 权限，Account ID 是否正确
 
 - gbrain-recovery: R2 备份恢复完整流程
 - gbrain-backup: 定时备份脚本 backup.sh
+
