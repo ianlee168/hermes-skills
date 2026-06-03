@@ -18,11 +18,16 @@ description: gbrain 记忆系统完全恢复流程 — 从 R2 + Google Drive 双
 
 ## GitHub Token
 
-```
-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
-```
+40位 PAT（ghp_ 开头），**用于访问 `ianlee168/hermes-skills` 私仓**。
 
-40位 PAT，不过期（改密码才 revoke）。用于访问私库 `ianlee168/hermes-skills`。
+**新 bot 怎么拿 token：**
+1. 找 ianlee168 申请新 PAT（需要 `repo` scope）
+2. hex encode 整段 token：`echo -n 'ghp_...your-token' | xxd -p -r` 看输出
+3. 把 hex 字符串替换下面 HEX 变量的值
+
+**或者**去 https://github.com/settings/tokens 自己生成（需 `repo` scope），然后 hex encode 替换 `HEX` 字符串。
+
+**HEX 字符串位置：** 在 `## 跨平台通用恢复 → Step 1 拿 GitHub Token` 段找 `HEX='...'` 替换。
 
 ## 快速恢复
 
@@ -86,7 +91,7 @@ gbrain list --n 5
 ### Step 5：安装/更新 skills（从 GitHub 私库）
 
 ```bash
-GH_TOKEN='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'
+GH_TOKEN='<your-gh-PAT-40-characters>'
 
 for item in 'cloudflare-access:cloudflare-access-skill.md' 'gbrain-recovery:SKILL.md' 'gbrain-backup:backup.sh'; do
   skill="${item%%:*}"
@@ -183,13 +188,149 @@ rclone config create hermes_backup drive
 0 3 * * * /bin/bash /home/ianlee168/.hermes/skills/gbrain-backup/backup.sh >> /home/ianlee168/.hermes/logs/gbrain-backup.log 2>&1
 ```
 
-## 实战验证（2026-06-03，跑了 2 遍完整流程全通）
+## 跨平台通用恢复（任何 IP / 任何 bot，2026-06-03）
+
+**任何机器跑这个流程都通**，不依赖 50.161、Linux、Windows。
+
+### 0. 准备（一次性）
+
+```bash
+# 路径变量（按本机平台二选一）
+# Linux / macOS:
+GBRAIN_DIR="$HOME/gbrain-data"
+# Windows (Git Bash / MSYS):
+# GBRAIN_DIR="$HOME/gbrain-data"   # 解析为 C:\Users\<you>\gbrain-data
+
+# skills 存放位置（按本机平台二选一）
+# Linux:
+SKILL_DIR="$HOME/.hermes/skills"
+# Windows (Git Bash):
+# SKILL_DIR="$HOME/.hermes/skills"
+```
+
+### 1. 拿 GitHub Token
+
+```bash
+# 情况 A：gh CLI 缓存还在
+GH_TOKEN=*** 'oauth_token:' ~/.config/gh/hosts.yml | tail -1 | awk '{print $2}')
+
+# 情况 B：连 hosts.yml 都没了，从 hex 解码
+# HEX 字符串是 ianlee168 提供的 40 字符 PAT 的 hex 编码
+# 联系 ianlee168 拿新 HEX（或自己生成 PAT 后 hex encode）
+HEX='<HEX_STRING_FROM_IANLEE168>'
+GH_TOKEN=*** '%s' "$HEX" | xxd -r -p)
+# 期望得到: ghp_ 开头 40 字符
+```
+
+### 2. 验证 Token
+
+```bash
+STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+  -H "Authorization: token $GH_TOKEN" \
+  https://api.github.com/repos/ianlee168/hermes-skills)
+echo "HTTP:$STATUS"
+[ "$STATUS" = "200" ] || { echo "❌ token 失效，去 https://github.com/settings/tokens 重新生成"; exit 1; }
+```
+
+**HTTP 401 = token 错 / 失效。** 不是 404。重新生成 PAT（hex encode 后替换 HEX 字符串）。
+
+### 3. 下载 3 个 skill
+
+```bash
+mkdir -p "$SKILL_DIR/cloudflare-access" "$SKILL_DIR/gbrain-recovery" "$SKILL_DIR/gbrain-backup"
+
+curl -s -H "Authorization: token $GH_TOKEN" \
+  'https://api.github.com/repos/ianlee168/hermes-skills/contents/cloudflare-access/cloudflare-access-skill.md' \
+  | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" \
+  > "$SKILL_DIR/cloudflare-access/cloudflare-access-skill.md"
+
+curl -s -H "Authorization: token $GH_TOKEN" \
+  'https://api.github.com/repos/ianlee168/hermes-skills/contents/gbrain-recovery/SKILL.md' \
+  | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" \
+  > "$SKILL_DIR/gbrain-recovery/SKILL.md"
+
+curl -s -H "Authorization: token $GH_TOKEN" \
+  'https://api.github.com/repos/ianlee168/hermes-skills/contents/gbrain-backup/backup.sh' \
+  | python3 -c "import sys,json,base64; print(base64.b64decode(json.load(sys.stdin)['content']).decode())" \
+  > "$SKILL_DIR/gbrain-backup/backup.sh"
+chmod +x "$SKILL_DIR/gbrain-backup/backup.sh"
+```
+
+### 4. 恢复 gbrain 记忆
+
+**先看 R2 有什么备份：**
+```bash
+# 列 R2 上 1 年内的 gbrain 备份
+rclone ls gbrain_r2:huawei-car-raw/ --max-age 1y | grep gbrain-
+
+# 列 Drive 上的备份
+rclone ls hermes_backup:hermes-gbrain-backup/ --max-age 1y | grep gbrain-
+```
+
+**前提：本机 rclone 已配 `gbrain_r2` 和 `hermes_backup` 两个 remote**（`rclone config file` 查路径，`rclone listremotes` 列出现有 remote）。如未配，参见 `cloudflare-access` skill 创 R2 token + `rclone config`。
+
+**下载 + 解压：**
+```bash
+mkdir -p "$GBRAIN_DIR"
+
+# R2 优先（取最新一份）
+LATEST=$(rclone lsl gbrain_r2:huawei-car-raw/ 2>/dev/null | grep gbrain- | sort -k2 -r | head -1 | awk '{print $2}')
+if [ -n "$LATEST" ]; then
+    echo "从 R2 拉: $LATEST"
+    rclone copyto "gbrain_r2:huawei-car-raw/$LATEST" "$GBRAIN_DIR/$LATEST"
+    cd "$GBRAIN_DIR" && tar -xzf "$LATEST"
+else
+    echo "R2 无备份，尝试 Drive"
+    LATEST=$(rclone lsl hermes_backup:hermes-gbrain-backup/ 2>/dev/null | grep gbrain- | sort -k2 -r | head -1 | awk '{print $2}')
+    if [ -n "$LATEST" ]; then
+        echo "从 Drive 拉: $LATEST"
+        rclone copyto "hermes_backup:hermes-gbrain-backup/$LATEST" "$GBRAIN_DIR/$LATEST"
+        cd "$GBRAIN_DIR" && tar -xzf "$LATEST"
+    else
+        echo "❌ R2 和 Drive 都无备份，脑恢复失败"
+        exit 1
+    fi
+fi
+```
+
+**注意：备份是 PG 17 格式，不能解压覆盖 PG 18 运行的脑。** 用 PGlite 读取（参见 `## ⚠️ 版本不匹配问题` 段），或在新机器上当 read-only 脑加载。
+
+### 5. 验证
+
+```bash
+# 看脑里几 page
+cd "$GBRAIN_DIR/.." && gbrain list --n 5
+# 或: ls "$GBRAIN_DIR"
+```
+
+### 6. 失败时怎么排查
+
+| 症状 | 根因 | 修法 |
+|------|------|------|
+| `HTTP:401` | token 失效 | 去 https://github.com/settings/tokens 重生成 + 替换 HEX |
+| `HTTP:404` | 路径错 / 仓不存在 | 仓已 public 但 `api.github.com` 路径用 `repos/ianlee168/hermes-skills/contents/...` 形式 |
+| `rclone: command not found` | rclone 没装 | https://rclone.org/install/ |
+| `Failed to create config file` | rclone.conf 不在 | `rclone config file` 查位置；或从 50.161 `scp 50.161:/home/ianlee168/.config/rclone/rclone.conf` 拉 |
+| `gbrain_r2: not found` | rclone.conf 缺该 remote | `rclone config` 加（参见 cloudflare-access skill） |
+| 备份解压后脑读不出 | PG 17 vs 18 版本差 | 用 PGlite 读取，参见 `## ⚠️ 版本不匹配问题` |
+
+### 7. 私仓已变 public 兜底（无 token 也能跑）
+
+如果连拿 token 都失败（`HEX` 失效 / hosts.yml 没），仓已 public，bot 可用裸 raw URL：
+
+```bash
+curl -s "https://raw.githubusercontent.com/ianlee168/hermes-skills/main/gbrain-recovery/SKILL.md"
+```
+
+**但这只拿到 SKILL.md，rclone + token 还是得本机有。** 适合"bot 完全裸奔"只读知识。
+
+
 
 **新 bot 第一次跑本流程**时，按顺序跑这 5 步命令验证 token + skills 拉取都工作：
 
 ```bash
-# 1. 拿 token
-HEX='6768705f766e6242796e71446a667555775562596d497a543832716c475a7559593834325a385253'
+# 1. 拿 token（HEX 字符串联系 ianlee168 拿）
+HEX='<HEX_STRING_FROM_IANLEE168>'
 printf '%s' "$HEX" | xxd -r -p > /tmp/_gh_token
 GH_TOKEN=*** /tmp/_gh_token)
 
