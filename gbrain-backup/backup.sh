@@ -2,7 +2,7 @@
 # gbrain-backup: 每日备份 gbrain-data 到 Cloudflare R2 + Google Drive（双备份）
 set -e
 
-BACKUP_DIR="/home/ianlee168/gbrain-data"
+BACKUP_DIR="/home/ianlee168/.gbrain/brain.pglite"
 R2_REMOTE="gbrain_r2"
 R2_BUCKET="huawei-car-raw"
 GD_REMOTE="hermes_backup"
@@ -22,6 +22,13 @@ for remote in "$R2_REMOTE" "$GD_REMOTE"; do
         exit 1
     fi
 done
+
+# 打包前检查 PGLite 进程是否在跑（如果在跑，hot backup 风险）
+# 跳过 bun 的本脚本进程，只看其它 bun/node pglite
+PGLITE_RUNNING=$(ps -eo pid,comm,args | grep -E "(bun|node)" | grep -v "grep\|$$" | grep -iE "pglite|gbrain" | grep -v "gbrain-cli\|bun src/cli" | wc -l)
+if [ "$PGLITE_RUNNING" -gt 0 ]; then
+    log "WARN: $PGLITE_RUNNING PGLite process(es) running, hot backup may be inconsistent"
+fi
 
 log "Starting gbrain backup (R2 + Google Drive)"
 

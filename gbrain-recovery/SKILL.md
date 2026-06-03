@@ -17,12 +17,14 @@ description: gbrain 记忆系统完全恢复流程 — 任何 IP、任何机器�
 ## 一句话总结
 
 ```bash
-# 任何 bot 失忆只跑这一条
-curl -o brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz" && \
-mkdir -p ~/.gbrain && tar -xzf brain.tar.gz -C ~/.gbrain/ && \
-cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor
+# 任何 bot 失忆只跑这一条（注意 -k 绕 lucky 证书）
+curl -ksS -o brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz" && \
+tar -xzf brain.tar.gz -C ~/ && \
+cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor 2>&1 | grep -E "score|page"
 # 期望输出: "Weighted brain score: Brain score 87/100"
 ```
+
+**13 MB 拉下来 → 解压出 61 MB 脑 → 28 page 完整。** 13 MB 是压缩包（gzip 压缩比约 22%），里面装的是 61 MB 完整脑数据，**不是覆盖**。
 
 **这一条命令是陛下的"最终方案"——所有 bot、所有 IP、所有机器都用它。** 脑备份通过 ianlee168 的 Unraid NAS + lucky 内网穿透公网暴露，永久 + 每天 3 AM cron 自动更新。
 
@@ -34,16 +36,20 @@ cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor
 
 **主路径（强烈推荐）：**
 ```bash
-curl -o /tmp/brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz"
-mkdir -p ~/.gbrain
-tar -xzf /tmp/brain.tar.gz -C ~/.gbrain/
+# 注意 -k：lucky 证书是 bbs 的通配符，扩展不覆盖 backup 子域
+curl -ksS -o /tmp/brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz"
+# tar.gz 内部顶层目录是 brain.pglite/，解到 $HOME 自动建好
+tar -xzf /tmp/brain.tar.gz -C ~/
+# 脑数据最终在: ~/brain.pglite/ (PGLite 17 格式)
 ```
 
-**`~/.gbrain/brain.pglite/` 就是完整脑数据。**
+**`~/brain.pglite/` 就是完整脑数据（PGLite 17 格式）。**
 
 **备选（如果主路径的 URL 不通）：**
-- R2/Drive 备份：用 `cloudflare-access` skill 创 R2 token → `rclone copy gbrain_r2:huawei-car-raw/gbrain-latest.tar.gz`
+- R2/Drive 备份：用 `cloudflare-access` skill 创 R2 token → `rclone copy gbrain_r2:huawei-car-raw/gbrain-latest.tar.gz ~/`
 - scp 跨机：联系 ianlee168 拿有脑机器的 SSH 凭据
+
+**重要：解压后脑是 read-only 还是 read-write 取决于 gbrain 引擎配置。** 用 PGlite 直读（参见 `## PGlite 直读脑数据` 段）兼容性最好。
 
 ### Step 2：拉 4 卷 skill（让 bot 知道怎么用脑）
 
