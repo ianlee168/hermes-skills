@@ -18,11 +18,25 @@ triggers:
 | 症状 | 第一步 |
 |------|--------|
 | `i/o timeout` | 确认 DID 是否变了（摄像头 IP 改了 = DID 变了） |
-| `401 Unauthorized` | token 过期，执行 token 刷新 |
+| `401 Unauthorized` | token 过期 → 最省事: `docker restart go2rtc` 重认证(看门狗也在做) |
 | `read-only file system` | docker-compose.yml 挂载是 `:ro`，改成 `:rw` |
 | Load Devices 无响应 | 检查 NAS 网络能不能访问 `api.io.mi.com` |
 
 ---
+
+## ⚠️ 401 凭证过期 = 失联头号原因(2026-08 实战)
+
+**症状**:Frigate 页面没画面,go2rtc 日志每 ~10 秒一条 `401 Unauthorized`,持续数天(实测累计 31,161 次)。
+**根因**:小米 P2P 凭证有有效期,过期后 go2rtc 无法向米家云重认证。
+**修复**:`docker restart go2rtc` 重启即重新认证,生成全新 P2P 凭证,401 归零。
+
+**已部署看门狗**(Unraid `/boot/custom/scripts/go2rtc-watchdog.sh`,cron 每分钟):
+- 检测日志近 2 分钟出现 401 → 自动 `docker restart go2rtc`
+- 5 分钟冷却防重复重启;日志 `/boot/custom/scripts/go2rtc-watchdog.log`
+- ⚠️ Unraid /boot 是 FAT32 无执行位 → crontab 里必须 `bash xxx.sh` 前缀(chmod +x 无效)
+- 持久化:crontab 追加在 `/boot/config/go`(重启自动重挂)
+
+**为什么之前没发现**:监控只盯"画面有没有",没盯日志 401;凭证 3.6 天才出问题,短会话看不出。
 
 ## 架构
 
