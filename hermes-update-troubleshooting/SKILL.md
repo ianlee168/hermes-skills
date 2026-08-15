@@ -93,6 +93,13 @@ hermes desktop --force-build --build-only
 ```
 (~2-4 min; re-runs npm install + electron-builder, regenerates
 `apps\desktop\release\win-unpacked\Hermes.exe`, shortcut works again.)
+Plain `hermes desktop --build-only` (no `--force`) also rebuilds when
+`release/` is missing — the stamp check only skips the build when the
+artifacts already exist. Verified 2026-08-15: successful `--build-only`
+rebuilt a 214 MB Hermes.exe; the app then launched (multi-process
+Electron tree). Note the update flow may report exit 0 with the desktop
+stage unbuilt (`desktop-update-handoff.log` shows "retry exit code: 0"
+while `release/` is missing) — trust the filesystem, not the exit code.
 Check nothing else is holding hermes.exe first (`Get-Process hermes`)
 to avoid re-triggering the ZIP path on the next update.
 
