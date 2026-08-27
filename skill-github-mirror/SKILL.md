@@ -41,6 +41,14 @@ cd /tmp/hermes-skills-github
 mkdir -p <skill-name>            # 或 smart-home/<skill-name> 等现有分类
 cp <本地SKILL.md路径> <skill-name>/SKILL.md
 
+# 3.5 装到本地(⚠️ 关键一步,GitHub 有 ≠ 本地有)
+# 教训(2026-08-27 摄像头断流):skill 在 GitHub 躺了俩月,本地 skills_list 看不到
+# → 排查时永远想不起来加载,现场从零瞎试,直到用户提醒"去看 GitHub"。
+# 同步后必须复制到本 bot 的 skills 目录,下次才能自动加载:
+#   Windows: C:\Users\<user>\AppData\Local\hermes\skills\<category>\<skill-name>\
+mkdir -p ~/AppData/Local/hermes/skills/<category>/<skill-name>
+cp -r <skill-name> ~/AppData/Local/hermes/skills/<category>/
+
 # 4. 新目录 → 更新 README.md 两张归属表(用 patch 工具,注意保持 CRLF 行尾)
 
 # 5. 若有未提交改动先 stash,再 pull --rebase(防别人已 push)
@@ -65,6 +73,7 @@ gh api repos/ianlee168/hermes-skills/git/trees/main --jq '.tree[].path' | grep <
 
 ## 坑(都踩过)
 
+- **GitHub 有 ≠ 本地有**:skill 只在远程仓库,本 bot 的 skills_list 看不到 → 排查时永远不会被自动加载(2026-08-27 摄像头断流教训:现场从零瞎试直到用户提醒)。同步后按第 3.5 步复制到本地 skills 目录。
 - **Windows 上 `/tmp` = `C:/Users/ianle/AppData/Local/Temp`**——write_file 写"用户目录"和 git clone 到 /tmp 是两个地方,文件不会自动合并。要么全部在 /tmp 下操作,要么 copy 过去。
 - **git 身份未配置**:`git commit` 报 "Author identity unknown" → 按第 6 步用仓库历史作者配置(ianlee168 <31464826+ianlee168@users.noreply.github.com>),别动全局配置。
 - **CRLF/LF**:patch 工具会把目标段换成 LF,git 会显示整文件改动但 diff 内容正确,不必纠结;拷贝新 SKILL.md 用 write_file(LF)即可。
