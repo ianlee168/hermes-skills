@@ -38,6 +38,24 @@ triggers:
 
 **为什么之前没发现**:监控只盯"画面有没有",没盯日志 401;凭证 3.6 天才出问题,短会话看不出。
 
+### ⚠️ 2026-08-27 风控升级:restart 不再够,必须 WebUI 验证码登录
+
+**症状**:`docker restart go2rtc` 后 401 依旧(8/12 时重启即恢复,这次不行);`i/o timeout` 媒体流读不到;`/api/streams` 里 producer 在但 consumers null、快照字节不变。
+
+**根因**:小米风控升级——令牌过期后 go2rtc 直连登录被拒(401),需**短信验证码**重新认证。
+
+**修复(唯一有效路径)**:
+1. 浏览器开 `http://<NAS_IP>:1986` → **add** → 拉到最底 **Xiaomi**
+2. 账号框选已有账号 → 密码框填密码 → **login** → 小米要求验证码(captcha + send)
+3. 点 **send** → 手机收短信 → 验证码填入 → 确认
+4. 登录成功 → go2rtc **自动生成全新 V1 令牌并写回 go2rtc.yaml**(xiaomi 节 userId 行更新)
+5. `docker restart go2rtc` → 验证 `/api/streams` 的 `bytes` 增长
+
+**🔴 致命坑(2026-08-27 实测)**:WebUI 登录保存配置时**会重写 go2rtc.yaml,可能把 `streams:` 节整个清空**!
+- 症状:登录成功但画面还是没恢复;`/api/streams` 返回 `{}`;yaml 只剩 ~14 行(streams 节空了)
+- **改配置前必须先 `cp go2rtc.yaml go2rtc.yaml.bak-$(date +%Y%m%d-%H%M%S)`**(每次都要)
+- 修复:从备份把 `streams:` 节加回(append 到 `streams:` 后),再 restart
+
 ## 架构
 
 ```
@@ -151,10 +169,12 @@ ssh root@192.168.50.1 "sed -i 's/:ro/:rw/' /mnt/user/appdata/go2rtc/docker-compo
 ssh root@192.168.50.1 "curl -s http://192.168.50.1:1986/api/streams"
 ```
 
-判断标准：
-- `bytes_recv: 0` + `producers` 为空 → P2P 未建立，超时中
-- `bytes_recv > 0`（如 `995004`）→ **P2P 已通**，视频/音频在拉流
-- 有 `receivers`（RTSP consumer）→ RTSP 输出可用
+**别被快照骗**:latest.jpg 字节数不变可能是**冻结帧缓存**(静态场景或断流),硬验证只有 `/api/streams` 的 `bytes` 持续增长 + producer 有 `remote_addr`(如 `192.168.50.66:26024`)和 `user_agent`(如 `CS2 (mxiang.camera.moc001)`)。
+
+判断标准(API 输出):
+- `producers` 为空 / `bytes: 0` → P2P 未建立,超时中
+- `bytes` 持续增长(如 54 万字节 + 600+ 包) → **P2P 已通**,视频/音频在拉流
+- 有 `receivers`(RTSP consumer) → RTSP 输出可用
 
 ---
 

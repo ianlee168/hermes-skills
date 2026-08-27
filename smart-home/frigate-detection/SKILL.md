@@ -66,6 +66,29 @@ curl -s http://<NAS_IP>:5000/api/config | grep -oE '"track":\[[^]]*\]'
 
 Frigate WebUI(`http://<NAS_IP>:5000/`)的**事件/回顾区**:检测到 person/cat/dog/bird → 自动记录片段 + 快照小图。"1 主画面 + 4 小画面"是**多路摄像头的网格布局**,单摄像头只有 1 个主画面,事件缩略图在回顾区。
 
+## frigate 崩溃循环修复(SQLite WAL 冲突,2026-08-27 实战)
+
+**症状**:frigate 容器 `Restarting (1)` 循环;docker logs 里 `peewee.OperationalError: disk I/O error`(或 `database disk image is malformed`);WebUI 打不开;`docker exec` 进不去。
+
+**根因**:恢复/替换 `frigate.db` 时**没同时清 `frigate.db-wal`(可到几十 MB)和 `frigate.db-shm`** → 新主库 + 旧 WAL 冲突,SQLite 写不进去 → frigate 启动即崩。
+
+**修复(容器内 /config/ 是容器层,宿主机 appdata/*.db 可能是历史遗留,先 `docker inspect frigate` 确认挂载)**:
+```bash
+docker stop frigate
+# 1. 备份损坏库留证
+mkdir -p /mnt/user/appdata/frigate/db-backup
+docker cp frigate:/config/frigate.db /mnt/user/appdata/frigate/db-backup/frigate.db.corrupt
+# 2. 生成干净空 SQLite(有效 header,peewee 会自动建表;本机 python3)
+python3 -c "import sqlite3; c=sqlite3.connect('/tmp/empty.db'); c.execute('CREATE TABLE _t(x)'); c.execute('DROP TABLE _t'); c.commit(); c.close()"
+touch /tmp/empty-wal /tmp/empty-shm
+# 3. 覆盖三个文件(主库 + WAL + SHM 全换干净)
+docker cp /tmp/empty.db  frigate:/config/frigate.db
+docker cp /tmp/empty-wal frigate:/config/frigate.db-wal
+docker cp /tmp/empty-shm frigate:/config/frigate.db-shm
+docker start frigate   # 等 ~1 分钟变 healthy
+```
+**代价**:事件/检测记录清空(录像文件在 /data 挂载,**不丢**);新库从零记录。
+
 ## 排查速查
 
 | 症状 | 原因 | 处理 |
