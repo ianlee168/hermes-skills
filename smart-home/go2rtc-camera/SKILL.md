@@ -9,16 +9,28 @@ triggers:
   - "go2rtc read-only"
   - "摄像头 ip 变了"
   - "摄像头 did 变了"
+  - "no frames"
+  - "no frames have been received"
+  - "摄像头没画面"
+  - "没画面"
+  - "画面冻结"
+  - "快照不变"
+  - "5000 断了"
+  - "5000 没画面"
+  - "frigate 打不开"
 ---
 
 # go2rtc Camera Streaming
 
 ## 快速诊断
 
+> ⚠️ **动手前先读完全文**——尤其"401 风控升级"一节:2026-08-27 起 restart 已不再够用,走弯路会被用户批评"每次都重新瞎搞"。标准顺序:备份 → WebUI 验证码登录 → 确认 streams 节还在 → 查 `/api/streams` bytes。
+
 | 症状 | 第一步 |
 |------|--------|
+| `no frames have been received` / Frigate 没画面 | 查 `/api/streams`:`{}` → streams 节被清空,从备份恢复;有 producer 但 bytes 不动 → 走 401 风控流程 |
 | `i/o timeout` | 确认 DID 是否变了（摄像头 IP 改了 = DID 变了） |
-| `401 Unauthorized` | token 过期 → 最省事: `docker restart go2rtc` 重认证(看门狗也在做) |
+| `401 Unauthorized` | **2026-08-27 起 restart 不再够**(风控升级)→ 走 WebUI 验证码登录流程(见下),不要只 restart |
 | `read-only file system` | docker-compose.yml 挂载是 `:ro`，改成 `:rw` |
 | Load Devices 无响应 | 检查 NAS 网络能不能访问 `api.io.mi.com` |
 
