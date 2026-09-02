@@ -1,7 +1,7 @@
 ---
 name: stock-footage-keywording
 description: "素材要卖(Pond5/Shutterstock)时生成上架 SEO 关键词元数据(标题+描述+40-50词)。"
-version: 0.2.0
+version: 0.3.0
 author: Hermes Agent (ianlee168)
 license: MIT
 platforms: [linux, macos, windows]
@@ -82,6 +82,14 @@ metadata:
 - [ ] v0.3:ffmpeg 抽关键帧 → 多模态模型(Gemini Flash / GPT-4o 类)直读画面 → 自动出四段式(先定跑哪台机器、走哪个 API)
 - [ ] 各平台 Title/Description 长度限制核实(Getty 分平台规则差异)
 
+## 三平台定位速查(照片 vs 影片,费率已核实 2026-09)
+
+| 平台 | 基因/强项 | 照片适合度 | 影片适合度 | 费率要点(官方) |
+|---|---|---|---|---|
+| Pond5 | footage-first(35M+ 视频,官方首页主打影片/音乐/SFX;照片次要) | 弱(30%,照片非其强项) | **最强**(视频非独 30%、独家 40%;可自定价但不得高于其他平台同价,会被压价) | 独家视频允许**同时**在 Shutterstock 卖视频 |
+| Shutterstock | 全品类海量 100M+;照片+视频通吃,订阅制买家为主 | 强(靠量;低档常 $0.10/次) | 强且对新人友好:视频 15–40% 六档,升档阈值远低于照片(10 次销售即 20%;照片要 100 次) | 不收 AI 生成内容 |
+| Getty/iStock | 同一申请通道双店(iStock 平价 RF + Getty premium);基因偏**照片 + editorial**,创意视频次之 | **最强**(premium 照片/新闻向是护城河;独家照片 Signature+ 订阅可到 $4.15/次) | 中(视频非独 20% 反超照片 15%;独家默认 25%,视频升档阈值低于照片) | ⚠️ **受控词表**:不在 Getty 词表的关键词会被丢弃——单独传 Getty 要用其 ESP/词表建议词,Pond5/SS 是自由文本 |
+
 ## 配套外部工具(已核实 2026-09)
 
 AI 初稿 → 工具校准是行业通行闭环;生成后可用下列工具反查验证:
@@ -97,5 +105,6 @@ AI 初稿 → 工具校准是行业通行闭环;生成后可用下列工具反�
 
 ## 版本记录
 
+- **0.3.0(2026-09-03)**:新增"三平台定位速查"——照片/影片适合度 + 费率(全部来自官方 contributor 协议/费率表:Getty 受控词表陷阱、Pond5 视频独家可同时卖 Shutterstock、SS 视频升档阈值低)。
 - **0.2.0(2026-09-03)**:新增铁律 6 主词前置排序;新增"配套外部工具"章节(Microstock+=StockSubmitter 换代、Xpiks 开源、TagsFinder 实为 IMS Keyworder 类,均查证);工作流加"反查校准"可选步。
 - **0.1.0(2026-09-03)**:初版。四类关键词结构 + 准确性/概念词/地名/排除项铁律 + 平台上限核实(Pond5 官方 40–50 建议、Shutterstock 50 硬顶)。输入限文字描述。
