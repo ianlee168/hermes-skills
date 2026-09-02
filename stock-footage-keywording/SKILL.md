@@ -1,7 +1,7 @@
 ---
 name: stock-footage-keywording
 description: "素材要卖(Pond5/Shutterstock)时生成上架 SEO 关键词元数据(标题+描述+40-50词)。"
-version: 0.1.0
+version: 0.2.0
 author: Hermes Agent (ianlee168)
 license: MIT
 platforms: [linux, macos, windows]
@@ -29,6 +29,7 @@ metadata:
 3. **真实地名是资产,不禁**:Bangkok、Thailand、street food market、tuk tuk 这类准确地名/文化词是亚洲素材卖欧美买家的核心搜索词,大胆用(前提:画面确实在那拍的)。
 4. **硬排除项**:品牌名、商标、产品名、真人姓名/地址/任何 PII、logo、可辨识店面招牌——一律不进关键词、标题、描述。
 5. **买家视角**:每条词过一遍——"买家会在搜索框输入这个词找我的素材吗?" 凑不够就宁缺毋滥,不同义堆砌凑数。
+6. **主词前置**:输出按买家搜索权重排序——主体/动作/地点等核心词放最前,概念/氛围词殿后。
 
 ## 输出结构
 
@@ -42,6 +43,7 @@ metadata:
 
 ### 3. Keywords(40–50 条,逗号分隔,去重,全英文)
 按四类产出,每类再展开买家搜索同义词(英/美拼写:holiday/vacation, colour/color;单复数)和用途场景词(commercial, documentary, travel vlog, background)。
+**排序规则**:最终列表按权重从高到低(主体→动作→地点→氛围→镜头→概念),前 5 词必须是核心主词。
 
 | 类别 | 内容 | 示例(曼谷夜市吃面) |
 |---|---|---|
@@ -59,8 +61,9 @@ metadata:
 
 1. 用户给素材描述(或逐镜头描述一段视频)
 2. 按铁律 1–4 先过一遍画面事实
-3. 产出四段式输出(Title/Description/Keywords/合规提醒)
+3. 产出四段式输出(Title/Description/Keywords/合规提醒),关键词按权重排序
 4. 关键词清点:40–50 条;不足 40 说明理由,不硬凑
+5. **(可选校准)**:拿核心词到 Xpiks / IMS Keyworder 反查同类热卖素材对照补漏。外部工具建议只作校验,不直接照抄(可能带垃圾词)
 
 ## 平台上限(已核实 2026-09)
 
@@ -70,15 +73,29 @@ metadata:
 | Pond5 | 上限 50(下限 5) | 「Master Your Metadata」建议 40–50 条 |
 | Getty/iStock | 未逐条核实,以上传后台提示为准 | 同卖家侧原则 |
 
-## 初版已知待优化清单(慢慢迭代)
+## 待优化清单(慢慢迭代)
 
-- [ ] 真实买家搜索词库/类目词表(卖得好的词 vs 冷门词)积累
+- [x] 词库积累 → 改用 Xpiks / IMS Keyworder 反查校准(2026-09-03),不再手攒词表
 - [ ] 视频多镜头 → 逐场景多组元数据的拆分规则
 - [ ] 拒审原因 → 规则回写(用户反馈迭代)
-- [ ] 批量 CSV/上传格式输出(Pond5/Shutterstock 的 CSV 表头未核实,先不写死)
-- [ ] v0.2:接入视觉分析自动读画面(需多模态模型,当前会话未挂 vision)
+- [x] CSV/上传导出 → 直接用 Xpiks / Microstock+ 自带导出,skill 不自造格式
+- [ ] v0.3:ffmpeg 抽关键帧 → 多模态模型(Gemini Flash / GPT-4o 类)直读画面 → 自动出四段式(先定跑哪台机器、走哪个 API)
 - [ ] 各平台 Title/Description 长度限制核实(Getty 分平台规则差异)
+
+## 配套外部工具(已核实 2026-09)
+
+AI 初稿 → 工具校准是行业通行闭环;生成后可用下列工具反查验证:
+
+| 工具 | 类型 | 干什么 | 备注 |
+|---|---|---|---|
+| Microstock+(ex-StockSubmitter) | 云平台 | 一次上传分发 33+ 平台;Quickmeta 按缩略图找"元数据 donor"模式 | 免费层 33 次/平台/月;stocksubmitter.com 是它的旧版同源,不是两家 |
+| Xpiks | 开源桌面 | 关键词建议(Shutterstock/Adobe/本地库反向检索)、AI keywording、拼写/去重、CSV 导出、FTP/SFTP | 免费核心;Pro 约 $7/月;免费层 60 查询/日/源(全用户共享限额) |
+| IMS Keyworder(ImStocker) | 网页 | 输入核心词 → 选相似图 → 挑高权重词 | 免费在线 |
+| MicrostockGroup Keyword Tool | 网页 | 老牌免费反查 | 只支持 photo/illustration/vector 类型 |
+
+⚠️ CyberStock 等"AI 关键词工具"多为订阅引流产品,"50M+ 真实买家搜索"类数据无独立来源,慎作依据。
 
 ## 版本记录
 
-- **0.1.0(2026-09-03)**:初版。四类关键词结构 + 准确性/概念词/地名/排除项四条铁律 + 平台上限核实(Pond5 官方 40–50 建议、Shutterstock 50 硬顶)。输入限文字描述。
+- **0.2.0(2026-09-03)**:新增铁律 6 主词前置排序;新增"配套外部工具"章节(Microstock+=StockSubmitter 换代、Xpiks 开源、TagsFinder 实为 IMS Keyworder 类,均查证);工作流加"反查校准"可选步。
+- **0.1.0(2026-09-03)**:初版。四类关键词结构 + 准确性/概念词/地名/排除项铁律 + 平台上限核实(Pond5 官方 40–50 建议、Shutterstock 50 硬顶)。输入限文字描述。
