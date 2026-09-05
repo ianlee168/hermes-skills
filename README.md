@@ -16,6 +16,7 @@
 | `skill-github-mirror/` | 50.110 Windows bot | skill→GitHub 同步流程，所有 bot 适用 |
 | `hermes-update-troubleshooting/` | 50.110 Windows bot | Hermes 自更新故障排查（含 ZIP fallback 清构建产物坑） |
 | `stock-footage-keywording/` | 50.110 Windows bot | 卖家侧素材上架关键词（通用，非本机专属） |
+| `crawl4ai/` | 50.110 Windows bot | LLM 友好爬虫 crawl4ai:评估结论、安装、抽取策略、反爬实话（通用） |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 改 skill 前的 3 步
@@ -56,6 +57,7 @@ git push origin main
 | `skill-github-mirror/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
 
