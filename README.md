@@ -47,6 +47,7 @@ git push origin main
 3. **不要 commit 字面 token** — `ghp_xxx` / `sk-xxx` / `R2 secret` 全部用 `<占位符>` 替换。`git diff` 时**自己**看一遍再 push。
 4. **不要写 "陛下" 称呼** — 写 "ianlee168" 或 "用户"。
 5. **先 dry run 再 push** — 改完跑一遍相关命令验证，再 commit。陛下 4 卷 → 王牌规矩"跑通 2 遍再写进 skill"。
+6. **通信通道约定（2026-09-06 定）** — Windows 台式机（50.110）侧推送一律走微信（weixin/iLink）；跑在 NAS 上的 Hermes VM（50.161）侧推送一律走 telegram。跨机迁移任务时发送通道随之切换（例：sp500 播报迁 50.161 后已改 telegram）。
 
 ## 谁管什么 — 解释
 
