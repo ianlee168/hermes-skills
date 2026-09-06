@@ -57,7 +57,18 @@ metadata:
 - 线上部署版: Hermes scripts 目录下的 sp500_etf_premium.py(同目录含 .log 日志与 state)
 - 迁移执行清单(含具体主机上下文): `references/migrate-to-50161.md`
 
-## 状态(2026-09-06)
+## 状态(2026-09-06 迁移完成)
 
-- 台式机 Hermes 两个 cron 已改 deliver=local(迁移完成前保持 enabled)
-- 迁移到 NAS 常驻 Hermes VM 进行中; 上线验证通过后由用户协调停旧 cron(pause 不删)
+- **50.110 两个 cron 已 pause**(open=e0291467075c / close=a2cef70a6102, 不删, 可 resume 回滚)
+- **50.161 已接管**: cron c9d36d08a9c8(open) / 1f4b6f12da58(close), no_agent + deliver=local,
+  脚本部署于 profile scripts 目录(~/.hermes/profiles/webui-hermes/scripts/), **发送目标=telegram
+  (用户指示, 不走微信)**——send_weixin 在 50.161 改名为 send_message(target=...), 退避与去重保留
+- 50.161 上其它 cron 若仍 deliver=weixin 会撞 iLink 限流(与 sp500 无关)
+
+## 迁移到别的主机时(部署要点)
+
+- 发送目标可换: `hermes send -t telegram` 或 `-t weixin`, 由目标机通道决定
+- cron script 相对路径解析到 **profile scripts 目录**(如 ~/.hermes/profiles/<name>/scripts/),
+  不是 ~/.hermes/scripts/——先确认 HERMES_HOME/profile 再放脚本
+- 50.161 老坑: cronjob 工具报 "gateway not running" 可能是误报——它探测的端口被
+  dashboard 占用, 用 `systemctl status hermes-gateway` / `hermes gateway status` 复核
