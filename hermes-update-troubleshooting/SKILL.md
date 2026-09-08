@@ -103,6 +103,55 @@ while `release/` is missing) — trust the filesystem, not the exit code.
 Check nothing else is holding hermes.exe first (`Get-Process hermes`)
 to avoid re-triggering the ZIP path on the next update.
 
+## Failure mode 5: desktop-driven update reports FAILED (exit 8) although the update succeeded
+
+Symptom: the app shows "更新失败 / failed verification, repair the
+installation", while code, deps, desktop build and gateway all landed.
+This is a **false negative in the post-update verify step**, not a
+failed update.
+
+Prove success before believing the card:
+- `logs/update_receipts/update_<ts>.json` → `outcome: success`,
+  `pre_update.sha` / `post_update.sha` both present
+- `apps/desktop/release/win-unpacked/resources/install-stamp.json` →
+  `commit` equals the receipt's `post_update.sha` (`dirty: false`)
+- `gateway_state.json` → `code_sha` = same sha, `running: true`
+- `logs/desktop-update-handoff.log` tail → `verify! RuntimeError: The
+  updated Desktop executable is missing` followed by `exit 8`
+
+Root cause: the hand-off verify step calls
+`verify_windows_desktop_update(Path.cwd())`, but the Desktop spawns the
+hand-off with `cwd: HERMES_HOME` (`apps/desktop/electron/main.ts`), so
+verification looks for `apps\desktop\release\win-unpacked\Hermes.exe`
+under HERMES_HOME and reports the exe missing even though it is intact.
+
+Rule out everything else with a cwd-exact repro (same interpreter and
+one-liner the script uses):
+```bash
+cd ~/AppData/Local/hermes/hermes-agent   # checkout root
+./venv/Scripts/python.exe -c "import hermes_cli.main; from pathlib import Path; from hermes_cli.desktop_update_verify import verify_windows_desktop_update; verify_windows_desktop_update(Path.cwd()); print('VERIFY OK')"
+# -> VERIFY OK, exit 0
+cd ~/AppData/Local/hermes                # HERMES_HOME
+# same command -> RuntimeError: The updated Desktop executable is missing
+```
+Passes from the checkout root + fails from any other cwd = this bug.
+
+Timeline rule: the hand-off loads `scripts/desktop-update/windows.ps1`
+from the checkout **as it exists when the hand-off starts**, so a run
+that *pulls* the verify code still executes the old script. The false
+exit 8 therefore first appears on the **next** desktop-driven update —
+"worked yesterday, failed today with no local change" is expected.
+Check with `git show <pre_update.sha>:scripts/desktop-update/windows.ps1
+| grep -c verify_windows_desktop_update` (0 = old script).
+
+What to do: nothing. Do NOT press repair and do NOT rebuild the app —
+the packaged app is intact and relaunches fine. Desktop-driven updates
+keep working (only the report is wrong); `hermes update` from a terminal
+is unaffected because it resolves the tree from module location.
+Do NOT patch `windows.ps1` locally: the hand-off runs
+`hermes update --force --keep-stash`, so a dirty tracked file gets
+stashed/overwritten and can flip the updater into its ZIP-fallback path.
+
 ## Fix ladder (in order)
 
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
@@ -124,6 +173,10 @@ to avoid re-triggering the ZIP path on the next update.
   is repo-owned and the fix is upgrading the system npm.
 - ❌ Do NOT assume the desktop app and CLI update identically — the
   stash-restore prompt is interactive and only the CLI can answer it.
+- ❌ Do NOT treat an in-app "update failed / repair installation" card
+  as proof of failure — verify-step false negatives exist (see mode 5);
+  check receipt `outcome`, `install-stamp.json` and `gateway_state.json`
+  before touching anything.
 - ❌ Hermes only upgrades npm inside its own managed Node install; the
   system npm (`C:\Program Files\nodejs\npm.cmd`) is left alone — that's
   the one you must fix yourself.
