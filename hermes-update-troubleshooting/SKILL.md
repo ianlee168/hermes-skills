@@ -152,6 +152,23 @@ Do NOT patch `windows.ps1` locally: the hand-off runs
 `hermes update --force --keep-stash`, so a dirty tracked file gets
 stashed/overwritten and can flip the updater into its ZIP-fallback path.
 
+Status: fixed upstream by pinning the hand-off process cwd to the install
+root before any update child starts (`[Environment]::CurrentDirectory =
+$InstallRoot`; `HermesUpdateJob.StartAssigned` passes a null
+CreateProcess currentDirectory, so children inherit the process dir).
+Because the hand-off runs the script loaded at hand-off start, the fix
+only takes effect **one desktop-driven update later** — a failure right
+after pulling it is expected, not a regression.
+
+Verify the mechanism without running an update: chdir to the checkout,
+spawn a child with **no** explicit cwd, run the verify one-liner → child
+sees the checkout and prints `VERIFY OK`. Do NOT test it from
+PowerShell (`&`, `cmd /c`, `Start-Process`): PowerShell passes its own
+location as the child's working directory, so the test false-negatives
+even with the fix in place. Use a non-PowerShell parent (python
+`os.chdir` + `subprocess.run(..., cwd=None)`) to mirror
+`CreateProcess(null)`.
+
 ## Fix ladder (in order)
 
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
