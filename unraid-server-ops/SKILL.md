@@ -480,7 +480,8 @@ for v in iStoreOS "Home Assistant" Hermes; do echo "--- $v"; virsh dumpxml "$v" 
    go 里 `bash /boot/custom/scripts/autofan-boot.sh >/dev/null 2>&1 &`(带 `&`,别阻塞启动)+ 惯用 cron 重装行 `(crontab -l | grep -v autofan-boot; echo "*/5 * * * * bash /boot/custom/scripts/autofan-boot.sh >/dev/null 2>&1") | crontab -`(/boot 是 vfat,一律 `bash 脚本` 调用)。
 2. **残留 lockfile → "起了又秒死"**。autofan 脚本里 `if [[ -f $lockfile ]]` 且 pid 已死 且未带 `-q` → 走 `else rm $lockfile` 分支 → 随后 `while [[ -f $lockfile ]]` 判定为假 → 后台循环**立即退出**(但 pid 已写进锁文件、syslog 也打了 "started")。症状:看护脚本报启动失败、`pgrep` 找不到进程、pwmN 却被动过(那是上一次的残留值)。**必须在启动前清掉指向已死 pid 的 `/var/run/autofan_*.pid` 并重试一次**;开机时 /var/run 干净,所以只有"中途死了再拉"才踩。
 3. **`-f` 必须填与 `-c` 同通道的 tach**。实测 pwm3↔fan3(130→255 时 fan3 976→1506rpm,fan2 不动);填错虽仍能控速,但日志/rpm 报的是别的风扇,rpm_min 归零点也会打错通道。判定法:临时 `echo 1 > pwmN_enable; echo 255 > pwmN`,看哪个 `fan*_input` 变,完后 `echo <原值> > pwmN_enable` 还原(主板常默认 `pwmN_enable=2` = 芯片自动控速,此模式下写 pwmN 无效,autofan 需要时自己切成 1)。
-4. 旁证:`sdspin /dev/nvme0` 返回非 0 → autofan 把 NVMe 当"读不到"**跳过** → 磁盘风扇曲线只由 HDD 驱动(实测 max 取自 sdb 45C,缓存盘 46C 不参与)。另外 `-l 30` 配内部 `PWM_OFF=PWM_LOW-PWM_OFF_OFFSET=0` 意味着"最热硬盘 ≤ TEMP_LOW 时风扇全停",要保底转速须把 `-l` 提到 ≥60。
+4. 旁证:`sdspin /dev/nvme0` 返回非 0 → autofan 把 NVMe 当"读不到"**跳过** → 磁盘风扇曲线只由 HDD 驱动(实测 max 取自 sdb 45C,缓存盘 46C 不参与)。另外 `-l 30` 配内部 `PWM_OFF=PWM_LOW-PWM_OFF_OFFSET=0` 意味着"最热硬盘 ≤ TEMP_LOW 时风扇全停",但 **⚠️ 别以为 `PWM_OFF` 算出 0 风扇就会停 —— 实测那颗 4pin 机箱风扇有硬底速**(pwm3 给 0/40/75 都是 ~506rpm,给 120 → 717rpm,给 255 → 1506rpm)。所以曲线低段只是"平"在底速,通风不会断,不需要为了防停转去改 `-l`。
+   **干净的 pwm↔rpm 测量法**:先 `kill $(head -1 /var/run/autofan_*.pid)` 停掉守护进程再逐个 `echo <值> > pwmN`(每次等 15-20s 让风扇稳态),否则 autofan 每 `-m` 分钟会把你手写的值覆写回去 ——长测会悄悄变成"在测 autofan 自己的档位"(踩过:45 秒长测读到的 84 就是它刚写的,不是 0)。测完用看护脚本重启即可(它会自动清残留锁)。
 
 ## ca.update.applications:自动更新静默失效的根因(2026-09-11 实测)
 
