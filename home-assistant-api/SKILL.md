@@ -2,7 +2,7 @@
 name: home-assistant-api
 description: Use when reading or controlling Home Assistant entities.
 version: 1.0.0
-author: <THIS_HOST> bot
+author: 本机 bot (<THIS_HOST>)
 platforms: [windows, linux, macos]
 tags: [home-assistant, smart-home, api, credentials]
 metadata:
@@ -21,7 +21,7 @@ metadata:
 ❌ `curl http://50.206:8123/` → Windows 把 `50.206` 解析成 IP **50.0.0.206**,超时。
 ✅ `http://<HA_HOST>:8123/` —— 本机(<THIS_HOST>)与 HA 同网段。
 
-- 内存里的 `50.206` 只是简写,**发请求时永远补全完整四段**（写成 `<HA_HOST>` 那种全地址）。
+- 内存里的 `50.206` 只是简写,**发请求时永远补全完整四段**(`<HA_HOST>`)。
 - 401 = 实例在跑、但请求没带 token;连不上时先跑 ping <HA_HOST> 再怀疑服务。
 
 ## 令牌位置(不要问用户要第二次)
@@ -156,6 +156,40 @@ cp file //<HA_HOST>/config/www/ # 直接能写
 - **手机端常用 `floorplan.png`**`:svg→png` 用
   `chrome --headless=new --force-device-scale-factor=2 --window-size=1200,850 --screenshot=floorplan.png file:///…/floorplan.svg`,
   产物 2400x1700,丢进 `www/` 即可。
+
+## 彩平图本地拖拽编辑器(2026-09-13 做好,本机常备)
+
+HA 官方**不支持拖拽摆按钮** —— YAML 模式仪表盘没有 UI 编辑器;picture-elements 的编辑器
+(仅 storage 模式有)也只是数字输入框,官方社区至今还在求拖拽。所以自建了一个:
+
+- **位置**:`~/ha-caiping-editor/`(`server.py` + `index.html`),双击同目录
+  `启动拖拽编辑器.bat`,`http://127.0.0.1:8765/`
+- **原理**:起本地 HTTP 服务 → 读 `//<HA_HOST>/config/dashboards/caiping.yaml` 解析出
+  带 `left/top` 的 button-card 元素 → 页面拖动图钉 → POST 回服务端 → 只改那两行数字
+  (注释/模板/实体原样保留)+ 先备份 → 写回 SMB
+- **效果验证**:YAML 仪表盘每次请求重读盘 → 存完刷新 HA 页面即生效
+
+### 写这类本地小工具的两个教训(都真踩过)
+
+1. **接口参数形状必须显式兼容**:前端发的是 `{left, top}` 对象,后端却按 `[0]/[1]` 取 →
+   `KeyError: 0`;**报错又被 `str(ex)` 吐成一个裸 `0`**,界面上就只是“没反应/看不懂”。
+   凡是自家前后端约定的字段,两边都写清楚,后端 `isinstance(v, dict)` 兼容两种形状。
+2. **“没反应”往往是因为按钮被禁用**:无改动时 `disabled=true` 的保存按钮点下去毫无反馈,
+   用户根本分不清“没改动”和“坏了”。→ 按钮常亮 + 无改动时明说原因;有改动时把数量写在
+   按钮上(`保存到 HA (3)`);离开页面前提醒;服务端每次写盘打一行日志。
+
+### 标签从哪来(元素定位靠注释)
+
+解析器按 **`name:` > 紧跟元素上方的 `#` 注释 > 实体 friendly_name > 实体 id** 取名;
+`# ---- 客厅（svg x...）----` 这类装饰分隔行要跳过,否则会变成标签。
+温湿度卡这类没有 `entity:` 的元素(用 `temp_entity`/`humi_entity`)要回退到子实体,
+否则右边列表里会显示“—”,用户就看不出这是哪个设备。
+
+### 视图密度:手机端故意比平板端少
+
+平板端 panel 全屏(图宽 >1000px)可站 22 个图钉;**手机端图只有 ~380px 宽,22 个 44px 按钮
+会互相压住点不中**,所以手机端图上只放最常用的 8 个,其余全部走下方「设备控制」实体列表
+(总共可操作反而更多)。这是用户认可的设计,不要“好心补齐”。
 
 ## 相关
 
