@@ -21,7 +21,7 @@ metadata:
 ❌ `curl http://50.206:8123/` → Windows 把 `50.206` 解析成 IP **50.0.0.206**,超时。
 ✅ `http://<HA_HOST>:8123/` —— 本机(<THIS_HOST>)与 HA 同网段。
 
-- 内存里的 `50.206` 只是简写,**发请求时永远补全完整四段**(`<HA_HOST>`)。
+- 内存里的 `50.206` 只是简写,**发请求时永远补全 <HA_HOST>.**
 - 401 = 实例在跑、但请求没带 token;连不上时先跑 ping <HA_HOST> 再怀疑服务。
 
 ## 令牌位置(不要问用户要第二次)
@@ -190,6 +190,68 @@ HA 官方**不支持拖拽摆按钮** —— YAML 模式仪表盘没有 UI 编�
 平板端 panel 全屏(图宽 >1000px)可站 22 个图钉;**手机端图只有 ~380px 宽,22 个 44px 按钮
 会互相压住点不中**,所以手机端图上只放最常用的 8 个,其余全部走下方「设备控制」实体列表
 (总共可操作反而更多)。这是用户认可的设计,不要“好心补齐”。
+
+## button-card 模板两个致命坑(2026-09-13 实战: 卡片显示 error)
+
+### 坑1: `[[[ ]]]` 不能套娃
+
+```yaml
+# ❌ 错——button-card 从第一个 [[[ 取到下一个 ]]],得到 var state = states[' → SyntaxError → 卡片显示 error
+name: |
+  [[[
+    var state = states['[[[ return variables.entity ]]]'].state;
+  ]]]
+
+# ✅ 对——在 JS 里直接用变量，不要用模板插值
+name: |
+  [[[
+    var e = states[variables.entity] || {};
+    return (e.attributes.temperature || '--') + '°C';
+  ]]]
+```
+
+**`variables.X` / `states` / `entity` 在模板里本来就能直接用,不需要再嵌一层模板去取。**
+自查一行:
+```python
+import re
+blocks = re.findall(r"\[\[\[(.*?)\]\]\]", open(f, encoding='utf-8').read(), re.S)
+assert not [b for b in blocks if "[[[" in b]   # 应为空
+```
+
+### 坑2: `custom_fields` 里的嵌套卡,自己的字段要多包一层方括号
+
+官方文档(advanced/js-templates):嵌套的 `custom:button-card` 里的模板要 **多一对 `[]`**:
+
+```yaml
+custom_fields:
+  info:
+    card:
+      type: custom:button-card
+      entity: '[[[ return variables.entity ]]]'   # 3 括号 = 父卡求值(父卡有 variables)
+      name: |
+        [[[[                                       # 4 括号 = 嵌套卡自己求值,可用自己的 entity
+          var a = entity.attributes || {};
+          return (a.temperature != null ? a.temperature : '--') + '°C';
+        ]]]]
+```
+
+判断依据:**这个字段属于父卡还是嵌套卡**。父卡的 `variables` 在嵌套卡里也能读到(官方例子里
+父卡 `variables.b` + 子卡 `variables.c` 同时可用)。
+
+### 坑3: HA 会缓存 dashboard 的 `!include` 文件(最坑)
+
+**只改 `button_card_templates.yaml` → WS 拿到的还是旧内容,而且不报错、不提示**(实测
+连续两次请求都返回旧模板)。
+
+```python
+# 让 HA 重读 include 的办法:改一下【仪表盘文件】本身(哪怕只改一行的注释)
+# 把 dashboards/caiping.yaml 的某行注释改掉 → 整个仪表盘(含 include)重新从盘上读 → 立即生效
+```
+
+- 结论:**改模板库后必须同时动一下仪表盘文件**(写一行注释/touch 内容),否则白改。
+- 验证方法:`ws {"type":"lovelace/config","url_path":"..."}` 把返回的模板内容打出来跟盘上文件比对,
+  别只凭“文件写了”就宣布修好。
+- 不存在 second copy 的干扰:确认过 `/config/button_card_templates.yaml` 只有一份。
 
 ## 相关
 
