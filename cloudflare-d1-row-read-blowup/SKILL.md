@@ -136,6 +136,28 @@ Verify after upload: re-read `/settings` (bindings + compatibility_date),
 re-download the script and grep for your new symbols, and check
 `/versions?per_page=1` still reports `handlers: [fetch, scheduled]`.
 
+## Ship a mechanical gate, not a rule
+
+A rule in a README does not survive a well-meaning deploy — including one
+from another agent. Make the deploy script run
+`scripts/predeploy_check.py` and **refuse to upload** when it fails:
+
+- any `setInterval(` (or polling-style `setTimeout`)
+- `COUNT(*)` / `SUM(` / `AVG(` / `GROUP BY` with no `getStats(` within the
+  previous 6 lines (comment lines exempt, or the gate trips on its own docs)
+- a missing `getStats` definition
+- a `getStats` TTL below 3600 for the aggregate keys
+- a missing D1 binding name in the module
+- `node --check` failure
+
+After deploying, re-download the module and run the same check on it: that is
+the drift detector, and it is how you prove the live worker matches the repo
+baseline. Pin the baseline with a sha256 taken from a *deterministic*
+extraction (strip the multipart envelope, strip trailing blank lines, join
+with `\n`, append one `\n`) — the hash of the file you uploaded will differ
+from the hash of the module you download back, because Cloudflare normalises
+trailing blank lines.
+
 ## Pitfalls
 
 - A `cfut_`-prefixed Workers API token can read scripts but returns
