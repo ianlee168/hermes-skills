@@ -19,6 +19,7 @@
 | `crawl4ai/` | 50.110 Windows bot | LLM 友好爬虫 crawl4ai:评估结论、安装、抽取策略、反爬实话（通用） |
 | `unraid-server-ops/` | 50.110 Windows bot | Unraid(50.1) 运维大全:user scripts / VM 救援 / docker 权限 / 插件盘点 / 备份路线;IP 保留,凭证只在 gbrain |
 | `sp500-etf-premium-monitor/` | 50.110 Windows bot（创建）+ 50.161（迁移执行） | 标普500ETF溢价率播报 cron 架构与 iLink 限流坑；`references/migrate-to-50161.md` 为一次性迁移清单，含主机上下文 |
+| `cloudflare-d1-row-read-blowup/` | 50.110 Windows bot | D1 免费额度爆表排查与修复；Worker 上传必须带 `filename=index.js` |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 改 skill 前的 3 步
@@ -62,6 +63,7 @@ git push origin main
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
+| `cloudflare-d1-row-read-blowup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
