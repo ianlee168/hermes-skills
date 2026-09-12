@@ -2,7 +2,7 @@
 name: home-assistant-api
 description: Use when reading or controlling Home Assistant entities.
 version: 1.0.0
-author: 50.110 Windows bot
+author: <THIS_HOST> bot
 platforms: [windows, linux, macos]
 tags: [home-assistant, smart-home, api, credentials]
 metadata:
@@ -13,56 +13,46 @@ metadata:
 
 # Home Assistant API 接入与操作
 
-ianlee168 家里的 HA = Unraid 上的 KVM VM(HAOS,2vCPU/2GB),通过 REST + WebSocket API 操作。
+用户家里的 HA = Unraid 上的 KVM VM(HAOS 18.2,2vCPU/2GB,MAC 52:54:00:cc:8b:ec)。
 本 skill 管怎么接、怎么读、怎么写、怎么验证。
 
-**读接口随便用,动真实设备(灯/窗帘/空调/锁)前先问用户。**
+## 地址:必须写全 4 段
 
-## 地址:必须写全
+❌ `curl http://50.206:8123/` → Windows 把 `50.206` 解析成 IP **50.0.0.206**,超时。
+✅ `http://<HA_HOST>:8123/` —— 本机(<THIS_HOST>)与 HA 同网段。
 
-把 `50.206` 这类**两段简写**丢给 curl / 浏览器会被解析成另一个 IP(实测踩过,直接超时),
-**永远写全四段**(例:`http://<HA_IP>:8123/`)。
-
-- 默认端口 **8123**(用户常少写 3,记成 812)。
-- `401` = 实例在跑、但请求没带 token;**连不上**先确认 VM 是否被暂停(cache 盘满 → QEMU 自动暂停 VM)
-  或 IP 是否漂移(DHCP 未绑定),再怀疑服务。
+- 内存里的 `50.206` 只是简写,**发请求时永远补全完整四段**（写成 `<HA_HOST>` 那种全地址）。
+- 401 = 实例在跑、但请求没带 token;连不上时先跑 ping <HA_HOST> 再怀疑服务。
 
 ## 令牌位置(不要问用户要第二次)
 
 | 位置 | 用途 |
 |---|---|
 | gbrain `credentials/home-assistant` | 权威副本(长期访问令牌) |
-| 本机 Hermes `.env` → `HASS_URL` + `HASS_TOKEN` | Hermes 平台插件用 |
+| `C:/Users/ianle/AppData/Local/hermes/.env` → `HASS_URL` + `HASS_TOKEN` | Hermes 插件用 |
 
-取了就走 env 变量 / `Authorization: Bearer`,**别 echo、别贴回聊天**(硬编码凭证也是仓库红线)。
-
-拿不到时:让用户在 HA 左下角头像 → 安全 → 长期访问令牌 → 创建,拿到后**立刻存 gbrain**。
+取了就用 env 变量 / `Authorization: Bearer`,**别 echo、别贴回聊天**(参考铁律)。
+拿不到时:让用户在 HA 左下角头像 → 安全 → 长期访问令牌创建,拿到后立刻存 gbrain。
 
 ## 快速验证(先查证再答)
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' "$HASS_URL/api/"            # 401 = 活着但没带 token
-curl -s -H "Authorization: Bearer $HASS_TOKEN" "$HASS_URL/api/"     # {"message":"API running."}
-curl -s -H "Authorization: Bearer $HASS_TOKEN" "$HASS_URL/api/config" | head -c 200
+curl -s -o /dev/null -w '%{http_code}\n' http://<HA_HOST>:8123/api/
+curl -s -H "Authorization: Bearer $HASS_TOKEN" http://<HA_HOST>:8123/api/
+curl -s -H "Authorization: Bearer $HASS_TOKEN" http://<HA_HOST>:8123/api/config | head -c 200
 ```
 
-- `/api/states` — 一次拉全部实体(配合 python 数域分布)
-- `/api/services` — 拉可调用的服务(域 → 服务名)
-- `/api/config` — 版本 / 站点名 / 已加载组件
+`/api/states` 一次拉全部实体;`/api/services` 拉可调用的服务。
 
 ## 最小 Python 客户端
 
 ```python
-import os, json, urllib.request
-
-BASE  = os.environ["HASS_URL"].rstrip("/")
-TOKEN = os.environ["HASS_TOKEN"]
-
+import urllib.request, json
+TOKEN = <从 .env 读 HASS_TOKEN>
 def api(path, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(BASE + path, data=data,
-        headers={"Authorization": "Bearer " + TOKEN,
-                 "Content-Type": "application/json"})
+    req = urllib.request.Request("http://<HA_HOST>:8123"+path, data=data,
+        headers={"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"})
     return json.load(urllib.request.urlopen(req, timeout=20))
 ```
 
@@ -71,65 +61,103 @@ def api(path, payload=None):
 服务调用返回 `200`/`[]` **只说明 HA 接受了请求**,不等于有可观察效果。
 
 - ❌ 别拿 `persistent_notification.create` 的 200 当证据:该通知**不落成 state 实体**,
-  `/api/states` 里查不到(2026.9.2 实测,实体总数前后不变)。
-- ✅ 回读该通知要用 **WebSocket**:
+  `/api/states` 里查不到(2026.9.2 实测,568 实体前后不变)。
+- ✅ 回读用 **WebSocket** `persistent_notification/get`(本机 `websockets` 库可用):
 
 ```python
-ws://<HA_IP>:8123/api/websocket
-# 收 {"type":"auth_required"}
-# 发 {"type":"auth","access_token":TOKEN} → 收 {"type":"auth_ok"}
-# 发 {"id":1,"type":"persistent_notification/get"} → result 列表
+ws://<HA_HOST>:8123/api/websocket
+# 收 auth_required → 发 {"type":"auth","access_token":TOKEN} → 收 auth_ok
+# 发 {"id":1,"type":"persistent_notification/get"} → 返回列表
 ```
 
 - 控制类实体改状态后,回读 `/api/states/<entity_id>` 核对 `state` + `last_changed`。
-- WS 通道还能做 REST 没有的事(订阅 `state_changed`、查注册表);反向代理下的 HA 若开了
-  `use_x_forwarded_for`,注意 WS 也要走同样的 header。
+- 动用户真实设备(灯/窗帘/空调)前先问 —— 读接口随便用。
 
 ## 家底快照(2026-09-13 实测)
 
-- HA 2026.9.2,**568 实体 / 62 服务域 / 271 服务**
-- light 46 / switch 103 / cover 4 / climate 3 / camera 3
+- HA 2026.9.2,站点名「我的家」,时区 Asia/Shanghai,**568 实体 / 62 服务域 / 271 服务**
+- light 46 / switch 103 / cover 4(客厅+卧室米家窗帘)/ climate 3 / camera 3(含 CW300 户外)
   / media_player 7(小米家庭屏×2、8 寸屏、中控屏)/ automation + scene + script 可触发
-- 手机推送:`notify.mobile_app_*` 多个 → **HA 能直接往用户手机推通知**
-  (设备侧通道,可与微信 / telegram 推送互为保险)
-- 组件:`xiaomi_miot`(米家全家桶)、`hassio`(Supervisor)、`mobile_app`、`notify`
+- 手机推送:`notify.mobile_app_pixel_8`、`mobile_app_oppo_find_n5`、`mobile_app_oppo_n6`
+  → **HA 能直接往用户手机推通知**(设备侧通道,可与微信/telegram 互为保险)
+- 组件已装:`xiaomi_miot`(米家全家桶)、`hassio`(Supervisor)、`mobile_app`、`notify`
+- 状态快照会变,数字只用来说明量级;每次要真实数字就现拉 `/api/states` 数。
 
-数字只用来说明量级,**要真实数字就现拉 `/api/states` 数**(先查证再答)。
+## 401 会产生一条 HA 通知
 
-## 401 会在 HA 里留一条通知
-
-未带 token 探测 `/api/` → HA 记一条 `Login attempt failed` 通知(来源是本机主机名)。
+未带 token 探测 `/api/` 会在 HA 里留一条 `Login attempt failed` 通知(来源=本机主机名 YFWL-Ian.lan)。
 看到别慌 —— 多半是 agent 自己探活留下的,可顺手 dismiss。
 
-## Hermes 侧接入(需启用插件 + 重启 gateway)
+## Hermes 侧接入(需重启 gateway + 启用插件)
 
-插件 `plugins/platforms/homeassistant` 是 **bundled 但默认不启用**的 —— 只重启 gateway 没用:
+插件 `plugins/platforms/homeassistant` 是**bundled 但默认不启用**的 —— 只重启 gateway 没用:
 
 ```bash
-hermes plugins enable homeassistant-platform --no-allow-tool-override   # 先启用("Takes effect on next session")
-hermes plugins show homeassistant-platform                              # Status 应为 enabled
+hermes plugins enable homeassistant-platform --no-allow-tool-override   # 先启用(提示 Takes effect on next session)
+hermes plugins show homeassistant-platform                              # Status 应变 enabled
 hermes gateway restart                                                   # 再重启
 hermes gateway status                                                    # 看新 PID
 ```
 
-- **启用前确认依赖**:插件要 `aiohttp`(bundled venv 里通常已有,`python -c "import aiohttp"` 验)。
-- **重启 gateway 不一定断开你的桌面会话**:desktop 的 chat 后端可能是另一个进程
-  (`hermes_cli.main serve --host 127.0.0.1 --port 0`),而 gateway 是计划任务 / 服务 ——
-  先 `Get-CimInstance Win32_Process`(Windows)或 `ps` 分清两边,再决定要不要提醒用户掉线。
-- 成功判据(`logs/gateway.log`):`Connecting to homeassistant...` → `[Homeassistant] Connected to <url>`
+- **重启 gateway 不会断开 desktop 会话**:desktop 的 chat 后端是另一个进程(`hermes_cli.main serve --host 127.0.0.1 --port 0`),
+  gateway 是 Windows 计划任务 `Hermes_Gateway`。用 `Get-CimInstance Win32_Process` 分清两边再动手。
+- 成功判据(`logs/gateway.log`):`Connecting to homeassistant...` → `[Homeassistant] Connected to http://…:8123`
   → `✓ homeassistant connected` / `Gateway running with N platform(s)`。
 - ⚠️ **事件转发默认是关的**:没配 `watch_domains` / `watch_entities` / `watch_all` 时日志会报
   `All state_changed events will be dropped` —— 连上是连上,但什么都不转发。配置写在 gateway HA 平台
-  的 `extra`:`{url, watch_domains[], watch_entities[], ignore_entities[], watch_all, cooldown_seconds(默认 30)}`。
-  别为了"接上"就开 `watch_all` —— 家里几百个实体会把 agent 淹掉。
+  的 `extra`: `{url, watch_domains[], watch_entities[], ignore_entities[], watch_all, cooldown_seconds(默认30)}`。
 - **出站两条路不同**:在线 adapter 的 `send()` 用 `persistent_notification.create`(标题固定 "Hermes Agent",实测可用);
   **离线/cron 投递**(standalone sender)走 legacy `notify.notify` + `target=<chat_id>` ——
   2026.9.2 实测非设备 target(`notify` / `persistent_notification` / 编造名)全部 **HTTP 500**,
-  只有 `mobile_app_<device>` 这类设备 target 才有戏;要在 cron 里推 HA 通知,先实测确认再写进 job。
+  只有 `mobile_app_<device>` 这类设备 target 才有戏;要在 cron 里推 HA 通知先实测确认。
 
-不重启也能干活:直接用上面的 REST/WS 手动读写。
+## 改 HA 配置文件：匿名 SMB 直通(2026-09-13 实测)
+
+**HA 的 `/config` 目录可以通过 SMB 直接读写,Samba 插件未设密码(guest 可写)**:
+
+```bash
+ls //<HA_HOST>/config          # 直接能列目录,无需凭据
+cp file //<HA_HOST>/config/www/ # 直接能写
+```
+
+- 端口 **445 开着**就是入口;22222(SSH 插件)/1337(Code Server)/8099(File Editor) 都关着。
+- ⚠️ `net view` 会报 1702,别被误导——直接访问 UNC 路径就行。
+- **改任何文件前先建时间戳备份目录**(如 `/config/.hermes-backup-YYYYMMDD/`)再 cp 原件。
+
+### YAML 模式仪表盘三个坑(都踩过)
+
+1. **`!include` 的路径基准是仪表盘文件所在目录**,不是 /config:`dashboards/caiping.yaml` 里写
+   `!include button_card_templates.yaml` → `Unable to read file /config/dashboards/...`;
+   写 `!include ../button_card_templates.yaml` 才对。
+2. **button-card 模板只从仪表盘配置里读**(`button_card_templates:` 写在 configuration.yaml
+   顶层是无效的,前端永远看不到)→ 必须把 include 放进仪表盘 yaml 顶层。
+3. **YAML 仪表盘是每次请求重新读盘的**——改完文件立刻生效,**不需要重启 HA**;
+   验证方式:`ws → {"type":"lovelace/config","url_path":"<path>"}`,success=true 且能数出
+   `button_card_templates` 数量就说明 HA 真的解析到了。
+
+```python
+# 读取/验证 YAML 仪表盘(WS)
+{"id":1,"type":"lovelace/config","url_path":"caiping-ui"}
+# 失败时 error.message 会带上具体行号与原因(如 Unable to read file …)
+```
+
+### 其他实测坑
+
+- **scenes.yaml / scripts.yaml 可热加载**:写完 `POST /api/services/scene/reload` 立即生效。
+- **中文场景名会被转成拼音式 entity_id**:`name: 离家` → **`scene.chi_jia`**(不是 li_jia),
+  `晚安`→`scene.wan_an`,`观影`→`scene.guan_ying`。用 `id:` 显式指定最稳;
+  **写完一定要回读真实 entity_id 再写进仪表盘**。
+- **`triggers_update` 里不能放 JS 模板**(button-card 只接受实体 id 或 `all`)——
+  模板里写 `- '[[[ return variables.entity ]]]'` 虽然能加载但不会更新,统一改 `all`。
+- **button-card 的 `custom_fields` 必须配 `styles.grid` 区域**,否则多个自定义字段会叠在
+  同一格里(模板里只有 styles.card 是残缺的)。
+- **坐标要从底图的真实几何算**:floorplan.svg 的 `viewBox="0 0 1200 850"`,
+  `left% = x/12`、`top% = y/8.5`;房间矩形直接从 svg 的 `<rect>` 里读,别凭感觉摆。
+- **手机端常用 `floorplan.png`**`:svg→png` 用
+  `chrome --headless=new --force-device-scale-factor=2 --window-size=1200,850 --screenshot=floorplan.png file:///…/floorplan.svg`,
+  产物 2400x1700,丢进 `www/` 即可。
 
 ## 相关
 
-- HA 备份加密密码 / HAOS 换盘迁移 / VM 救援 → skill `unraid-server-ops`
-- 摄像头(go2rtc / Frigate)→ skill `smart-home/go2rtc-camera`、`smart-home/frigate-detection`
+- HA 备份加密密码 / HAOS 换盘迁移 → skill `unraid-server-ops`(references/haos-vm-migration.md)
+  ⚠️ 该文档 2026-08-13 写的「无 HA token」已过期,2026-09-13 起有令牌。
