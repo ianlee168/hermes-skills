@@ -90,7 +90,10 @@ def main():
         if node:
             import os
             import tempfile
-            with tempfile.NamedTemporaryFile('w', suffix='.mjs', delete=False, encoding='utf-8') as f:
+            # newline='' 必须加：Windows 文本模式会把已有 \r\n 再翻一次成 \r\r\n，
+            # 那些裸 \r 会让 node --check 在模板字面量上报语法错。
+            with tempfile.NamedTemporaryFile('w', suffix='.mjs', delete=False,
+                                             encoding='utf-8', newline='') as f:
                 f.write(src)
                 tmp = f.name
             try:

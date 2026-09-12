@@ -171,6 +171,13 @@ trailing blank lines.
   `node --check` fails on the trailing `--<boundary>--` line.
 - Don't create the `stats` table by hand during an outage — the CREATE is
   blocked by the same read limit; put it in the post-reset job.
+- The `/content` response is **CRLF**-terminated. Normalise line endings
+  (Python `splitlines()`, then join with `\n`) before hashing, or the same
+  module yields two different sha256 values and your baseline pin becomes
+  unreproducible.
+- Writing a temp `.mjs` for `node --check` on Windows: pass `newline=''`.
+  Text mode turns `\r\n` into `\r\r\n`, and the stray `\r` makes node report a
+  syntax error inside template literals.
 
 ## Scripts
 
