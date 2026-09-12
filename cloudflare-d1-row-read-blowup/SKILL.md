@@ -97,8 +97,15 @@ read the table), so schema work has to wait for the 00:00 UTC reset.
    scan count/day = 86400/TTL. TTL 60s = 1440 scans/day — worse than the bug
    you are fixing. 3600s = 24 scans/day.
 
-3. **Slow the poller**: `setInterval(fn, 15000)` →
-   `setInterval(function(){ if (!document.hidden) fn(); }, 60000)`.
+3. **Delete the poller — do not just slow it down.** A dashboard that polls an
+   aggregate endpoint is a landmine: at 15s x a 26k-row scan, ~48 minutes with
+   the tab open exhausts a whole day's quota. Replace
+   `setInterval(fn, 15000)` with load-on-open plus the existing manual refresh
+   button, and delete the interval entirely — merely slowing it to 60s leaves
+   the trap armed for the next time someone shortens a cache TTL.
+   (A panel whose ✕ removes the DOM node usually stops the burn even while the
+   interval spins: the handler writes into the removed node and throws before
+   reaching `fetch`.)
 
 4. Refresh the cached keys at the end of the Worker's `scheduled()` handler by
    calling the same helper with `maxAgeSec = 0` (forces a refresh).
