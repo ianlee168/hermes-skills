@@ -310,6 +310,8 @@ Key facts:
 - iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 <见 gbrain concepts/net-topology>**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
   ⚠️ **50.5 的访问凭证（SSH 端口/密钥/密码）、HA 备份密码、小米账号等都在 gbrain `concepts/net-topology` 页面（2026-08-12 用户批准存脑）—— 问用户要密码之前先查脑库！**（2026-08-14 用户亲训："昨天不是告诉你50.5的密码了吗？怎么又问"）
 
+⚠️ **HA 的长期访问令牌在 gbrain `credentials/home-assistant`**（2026-09-13 起）—— 用 HA REST/WS API 前先查脑库，别问用户要第二次；接入与操作流程见 skill `home-assistant-api`。
+
 ## passwall 国内延迟排查（2026-08-14 实测，全链路结论：系统正常）
 
 症状：用户报"国内 ping 高、以前 2 位数"。完整诊断阶梯见 `references/passwall-domestic-latency.md`。要点：
