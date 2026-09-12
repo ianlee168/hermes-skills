@@ -101,11 +101,31 @@ ws://<HA_IP>:8123/api/websocket
 未带 token 探测 `/api/` → HA 记一条 `Login attempt failed` 通知(来源是本机主机名)。
 看到别慌 —— 多半是 agent 自己探活留下的,可顺手 dismiss。
 
-## Hermes 侧接入(需重启 gateway)
+## Hermes 侧接入(需启用插件 + 重启 gateway)
 
-插件 `plugins/platforms/homeassistant`:订阅 HA 事件总线 → 转发给 agent;出站走 HA 持久通知;
-cron 可走 `notify.notify`。只在 `.env` 有 `HASS_TOKEN` 时加载,**改 `.env` 后必须重启 gateway 才生效**
-(重启会让当前会话短暂掉线,先问用户)。
+插件 `plugins/platforms/homeassistant` 是 **bundled 但默认不启用**的 —— 只重启 gateway 没用:
+
+```bash
+hermes plugins enable homeassistant-platform --no-allow-tool-override   # 先启用("Takes effect on next session")
+hermes plugins show homeassistant-platform                              # Status 应为 enabled
+hermes gateway restart                                                   # 再重启
+hermes gateway status                                                    # 看新 PID
+```
+
+- **启用前确认依赖**:插件要 `aiohttp`(bundled venv 里通常已有,`python -c "import aiohttp"` 验)。
+- **重启 gateway 不一定断开你的桌面会话**:desktop 的 chat 后端可能是另一个进程
+  (`hermes_cli.main serve --host 127.0.0.1 --port 0`),而 gateway 是计划任务 / 服务 ——
+  先 `Get-CimInstance Win32_Process`(Windows)或 `ps` 分清两边,再决定要不要提醒用户掉线。
+- 成功判据(`logs/gateway.log`):`Connecting to homeassistant...` → `[Homeassistant] Connected to <url>`
+  → `✓ homeassistant connected` / `Gateway running with N platform(s)`。
+- ⚠️ **事件转发默认是关的**:没配 `watch_domains` / `watch_entities` / `watch_all` 时日志会报
+  `All state_changed events will be dropped` —— 连上是连上,但什么都不转发。配置写在 gateway HA 平台
+  的 `extra`:`{url, watch_domains[], watch_entities[], ignore_entities[], watch_all, cooldown_seconds(默认 30)}`。
+  别为了"接上"就开 `watch_all` —— 家里几百个实体会把 agent 淹掉。
+- **出站两条路不同**:在线 adapter 的 `send()` 用 `persistent_notification.create`(标题固定 "Hermes Agent",实测可用);
+  **离线/cron 投递**(standalone sender)走 legacy `notify.notify` + `target=<chat_id>` ——
+  2026.9.2 实测非设备 target(`notify` / `persistent_notification` / 编造名)全部 **HTTP 500**,
+  只有 `mobile_app_<device>` 这类设备 target 才有戏;要在 cron 里推 HA 通知,先实测确认再写进 job。
 
 不重启也能干活:直接用上面的 REST/WS 手动读写。
 
