@@ -102,6 +102,10 @@ Toast 的零依赖写法、验证方法与"全屏时横幅被静音"那条坑,�
 - ⚠️ `computer_use` 抓屏只抓**前台窗口**,系统 Toast 等覆盖层不在其中 → **看不到横幅 ≠ 没发出去**;
   投递用 Toast 历史条数证明,整屏截图要自己用 System.Drawing 抓(见
   `references/windows-toast-alerts.md`)。
+- ⚠️ **用 REST 调 HA 服务取数据要在 URL 上加 `?return_response=true`**:`POST /api/services/<domain>/<service>`
+  默认只回空数组 —— 像 `xiaomi_miot/request_xiaomi_api`(查米家云设备列表/事件)这类"取数据"的服务,
+  少这个参数会稳定回 `{"result": null}` / `[]`,极容易误判成"设备没数据/接口不支持"。
+  加上后读响应里的 `service_response` 字段(踩过:先用错了参数形状,也用过它)。
 - **只看事件监听不等于成功**:要让用户实际按一次门铃,日志里出现"已弹窗"才算通路。
 
 ## Pitfalls
@@ -118,6 +122,14 @@ Toast 的零依赖写法、验证方法与"全屏时横幅被静音"那条坑,�
   UTF-8 BOM(`encoding='utf-8-sig'`)。验证方法:把构建好的 XML 落盘回读,或读
   `ToastNotificationManager.History` 里实际那条通知的 `Content.GetXml()` 比对字符。
 - ⚠️ 触发链条涉及厂商云时,延迟取决于厂商云端;实测 1 秒可以接受,但不要宣传成"实时"。
+- ⚠️ **常驻监听绝不能用 Hermes 的 venv / `.hermes-runtime` 解释器跑**:只要有个长命进程占着该
+  解释器,`hermes update` 就会被 venv-holder 守卫拒绝(报 "another Hermes process is using this
+  installation",`update.log` 里什么都没有,证据在 `%LOCALAPPDATA%\hermes\logs\desktop.log` 的
+  `venv-blocked`)。本机固定用 `<USER_HOME>\ha-doorbell\.venv\Scripts\python.exe`
+  (启动器 `start_watcher.vbs` 已改成它 + 系统 Python 兜底;依赖 `websockets micloud pycryptodome requests`)。
+  自检(只读):`hermes-agent\venv\Scripts\python.exe hermes_cli/_scan_venv_blockers.py` → 期望 `"blocked": false`。
+  重启监听:`taskkill` 旧的 python(venv shim 与其 .hermes-runtime 子进程是两个 PID,都要杀),
+  再 `Start-Process wscript.exe -ArgumentList '"<USER_HOME>\ha-doorbell\start_watcher.vbs"'`,看 `doorbell.log` 出现"已连接 HA"。
 - ⚠️ 弹窗程序不要用 `MessageBox`(无人点击会永久挂住);用可自动关的置顶窗。
 - ⚠️ 用户说"有个文字提醒"时分清是谁弹的:自己的日志里有"已弹窗"才是自己弹的,
   否则可能是手机 App/设备本身的提示 —— 不要冒领成果。

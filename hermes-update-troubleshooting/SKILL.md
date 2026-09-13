@@ -169,8 +169,53 @@ even with the fix in place. Use a non-PowerShell parent (python
 `os.chdir` + `subprocess.run(..., cwd=None)`) to mirror
 `CreateProcess(null)`.
 
+## Failure mode 6: an unrelated user script on Hermes's interpreter blocks every update
+
+Symptom: the app (or CLI) aborts with "Update aborted: another Hermes
+process is using this installation." **`update.log` has nothing** — the
+venv-blocker guard runs before the log stream opens. The evidence is in
+`logs\desktop.log`:
+
+```
+[updates] venv-blocker scan reported 1 holder(s); re-scanning after settle (attempt 2/3)
+[updates] venv-blocked: 1 process(es) hold the install
+[updates] error: Update aborted: another Hermes process is using this installation.
+[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe <USER_HOME>\ha-doorbell\doorbell_watch.py
+```
+
+Any process whose interpreter is the Hermes venv **or**
+`.hermes-runtime\python\generation-*\...` counts as a holder — including
+long-lived user scripts started from the Startup folder. Killing the
+process buys one update; the launcher respawns it at next logon, so fix
+the launcher, not the symptom.
+
+Fix: give the user script its own interpreter and point the launcher at it
+(2026-09-13, doorbell watcher on 50.110):
+```bash
+cd ~/ha-doorbell
+uv venv --python "%LOCALAPPDATA%\\Programs\\Python\\Python314\\python.exe" .venv
+uv pip install --python .venv/Scripts/python.exe websockets micloud pycryptodome requests
+# start_watcher.vbs: py = base & "\.venv\Scripts\python.exe" (+ system-python fallbacks)
+taskkill /PID <shim> /PID <child> /F
+powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"<USER_HOME>\ha-doorbell\start_watcher.vbs\"'"
+```
+Notes: the venv `python.exe` shim + its `.hermes-runtime` child are ONE
+logical process (two PIDs, kill both), and the guard reports only the shim.
+
+Verify read-only, with the exact scan the updater's preflight consumes:
+```bash
+cd %LOCALAPPDATA%\hermes\hermes-agent
+./venv/Scripts/python.exe hermes_cli/_scan_venv_blockers.py
+# before: {"ok": true, "blocked": true, "processes": [the user script]}
+# after:  {"ok": true, "blocked": false, "processes": [], "pausable_gateways": 2}
+```
+`blocked: false` means the install is free — update normally (from the app
+while it runs; the app stops/relaunches its own `serve` backend).
+
 ## Fix ladder (in order)
 
+0. `grep -a "venv-blocked\|venv-blocker" %LOCALAPPDATA%\hermes\logs\desktop.log`
+   → a *non-Hermes* script listed there is mode 6 (fix its launcher).
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
    mode you're in (EBADENGINE / stash prompt / DB lock / actually OK).
 2. `npm --version` → if in a forbidden gap, `npm install -g npm@12`.
@@ -197,6 +242,10 @@ even with the fix in place. Use a non-PowerShell parent (python
 - ❌ Hermes only upgrades npm inside its own managed Node install; the
   system npm (`C:\Program Files\nodejs\npm.cmd`) is left alone — that's
   the one you must fix yourself.
+- ❌ Do NOT conclude "Hermes's updater is broken" from a refused update:
+  check `desktop.log` for `venv-blocked` — a leftover user script holding
+  the interpreter (mode 6) is the usual cause, and it is invisible in
+  `update.log`.
 - The SQLite WAL-reset warning in update.log ("Hermes venv links SQLite
   ... has the WAL-reset bug → provisioning a private Python runtime")
   is auto-repaired by Hermes itself; no user action needed.
