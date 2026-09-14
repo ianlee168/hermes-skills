@@ -71,6 +71,48 @@ opkg install --force-overwrite /tmp/lcb.ipk
   **静默失败**,`ls` 一看是空的,容易误判包格式。正确做法:先 `tar tzf x.ipk` 看列表,再 `tar xzf x.ipk` 解全部。
 - 反过来,`tar tzf` 能列出成员说明它确实是 tar.gz 包装,不必找 `ar`(BusyBox 通常没有 ar)。
 
+## 命令行装商店包(实测 2026-09-14 完整跑通)
+
+### ① 加源(4 条,别重复)
+
+```
+# /etc/opkg/customfeeds.conf —— istore_compat 已在 /etc/opkg/compatfeeds.conf,别重复写
+src/gz is_nas_luci https://istore.istoreos.com/repo/all/nas_luci
+src/gz is_store    https://istore.istoreos.com/repo/all/store
+src/gz is_nas      https://istore.istoreos.com/repo/x86_64/nas
+src/gz is_meta     https://istore.istoreos.com/repo/all/meta
+```
+
+### ② 签名坑(最容易卡在这里)
+
+- 症状:`opkg update` 打印 `Signature check failed.`,随后 `opkg install` 报
+  `Package <x> is not available from any configured src`,但 `opkg list | grep <x>` 又能看到。
+- 真相:**签名失败的源,索引文件会被 opkg 静默删掉**(只留 `is_meta` / `istore_compat`)。
+  对比 `/var/opkg-lists/`:通过的源有 `xxx` + `xxx.sig`,失败的只剩别的源。
+- 根因:商店源用**两把 key** 签。系统自带 `a56f16274c6d486b`(istore key,与 repo 根
+  `key-build.pub` 一致)+ `d310c6f2833e97f7` + `e767f93a0951ff45`;而 `is_nas_luci`/`is_store`/`is_nas`
+  的 `.sig` 写的是 `signed by key 1d15e401c11b3e0f` —— **这把公钥公开渠道拿不到**(repo 下无
+  `/keys/`、`key-<id>.pub` 均 404),别浪费时间找。
+- 正解:学商店自己的做法 —— 它的隔离环境 `/tmp/is-root/etc/opkg.conf` **没有 `option check_signature`**。
+  所以:临时把 `/etc/opkg.conf` 的 `option check_signature` 注掉 → `opkg update` → 装 → **立即恢复**。
+  (验证 sig 归属:`usign -V -p /etc/opkg/keys/<id> -x Packages.sig -m Packages.gz`)
+
+### ③ 装(一次过全部拆包冲突)
+
+```sh
+# 安装耗时长且会重启服务,必须后台跑+轮询,防 SSH 断线丢进度
+nohup sh -c "opkg install --force-overwrite app-meta-istorex > /tmp/meta-install.log 2>&1" >/dev/null 2>&1 &
+i=0; while [ $i -lt 33 ]; do pgrep -x opkg >/dev/null 2>&1 || break; sleep 15; i=$((i+1)); done
+tail -20 /tmp/meta-install.log
+```
+
+- 用 `pgrep -x opkg` 轮询,别用 `pgrep -f "opkg install"`(会匹配到自己那条 `sh -c` 包装命令,永远不退出)。
+- 一个 `--force-overwrite` 就能过掉链上**所有**同型冲突(luci-lib-linkeasefile vs luci-app-linkease 等),
+  无需逐个处理。冲突包与被替换包**版本号相同**时(如两边都 2.1.70-r3)文件通常完全一致,风险极低。
+- 实测代价:装完 app-meta-istorex 全家,overlay 从 444M → 1.1G(剩 812M),内存可用仍 1.4G/2G;
+  `linkeasefull` 装完会提示 `data root is not initialized; starting for first-run setup`,需用户进面板初始化。
+- 完成标志:再跑一次 `opkg install --force-overwrite app-meta-istorex` 应输出 `installed in root is up to date`。
+
 ## 环境备忘
 
 - 50.5 iStoreOS 24.10.8 x86_64,dropbear 端口 64891,root 公钥已授权;overlay 可用约 1.4G(装 166MB 应用可行但不宽裕)。
