@@ -23,6 +23,7 @@
 | `sp500-etf-premium-monitor/` | 50.110 Windows bot（创建）+ 50.161（迁移执行） | 标普500ETF溢价率播报 cron 架构与 iLink 限流坑；`references/migrate-to-50161.md` 为一次性迁移清单，含主机上下文 |
 | `cloudflare-d1-row-read-blowup/` | 50.110 Windows bot | D1 免费额度爆表排查与修复；Worker 上传必须带 `filename=index.js` |
 | `cloudflare-workers-d1/` | 50.110 Windows bot | Workers + D1 侦察/配额分级；D1 用量按 SQL 归因（`d1QueriesAdaptiveGroups.query`），治本先加索引、不许升级套餐 |
+| `hermes-cron-troubleshooting/` | 50.110 Windows bot | Hermes cron 没跑/投递失败诊断；**一次性 job 漏跑超 120s 会被删除**、工作与告警不能同一失效点 |
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
@@ -69,6 +70,7 @@ git push origin main
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
 | `cloudflare-d1-row-read-blowup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `cloudflare-workers-d1/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `hermes-cron-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `ha-desktop-alerts/*` | 50.110 Windows bot（如有） | 50.161 不审 |

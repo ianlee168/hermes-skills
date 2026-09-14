@@ -198,6 +198,13 @@ trailing blank lines.
   while the quota is blown) and is the ground truth that an index is really live. Recipe:
   run it for every hot statement, require `USING INDEX`/`USING COVERING INDEX` in each plan,
   then curl the public route.
+- **Schedule the remediation as a RECURRING job on an always-on host, and never pair the
+  work job with its alarm as two one-shots on the same machine.** Real failure: the 08:05
+  index job (deliver=local, silent) plus a 10:00 "read the report and shout" job were both
+  one-shots on a desktop that was powered off at 08:05; the scheduler came up at 10:27 and
+  deleted both in the same second (120 s grace window) — no fix, no alarm, two more days of
+  burned quota. The alarm must be later, recurring, and validated against an external fact
+  (usage numbers / `EXPLAIN` plans), not against the work job's own artifact.
 - **"A cron is scheduled to fix it" is not a fix.** A remediation job that ran with a
   `--dry-run` flag, or was deleted before it ever fired, leaves the rule doc claiming
   success while usage stays at 2x quota — two more days of downtime. Land the DDL, verify
