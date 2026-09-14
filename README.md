@@ -13,6 +13,7 @@
 | `switch-model-m1-m3/` | 50.110 Windows bot | 改 `config.yaml` 路径需自己适配本机 Hermes 配置 |
 | `smart-home/` | 50.1 Unraid bot（NAS 端） | go2rtc / Frigate 配置，Unraid 路径专属 |
 | `istoreos-passwall-update/` | 50.110 Windows bot | PassWall 升级流程，路由器专属 |
+| `istoreos-istore-package-ops/` | 50.110 Windows bot | iStoreX 商店升级报 file_clash / opkg 装不上商店包的处理，路由器专属 |
 | `skill-github-mirror/` | 50.110 Windows bot | skill→GitHub 同步流程，所有 bot 适用 |
 | `hermes-update-troubleshooting/` | 50.110 Windows bot | Hermes 自更新故障排查（含 ZIP fallback 清构建产物坑） |
 | `stock-footage-keywording/` | 50.110 Windows bot | 卖家侧素材上架关键词（通用，非本机专属） |
@@ -63,6 +64,7 @@ git push origin main
 | `gbrain-*` 系列 | 50.161 webui-hermes bot | 陛下看 git log |
 | `switch-*` | 50.110 Windows bot（如有） | 50.161 不审，直接推 |
 | `istoreos-passwall-update/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `istoreos-istore-package-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `skill-github-mirror/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |

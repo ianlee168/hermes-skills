@@ -1,78 +1,128 @@
 ---
 name: istoreos-passwall-update
-description: iStoreOS 路由器上 PassWall 的更新与排查 — ipk 直接安装(不用转 run)、官方仓库迁移、SSH 端口、opkg hold 固件保护、周更 cron。适用 OpenWrt 24.10 / iStoreOS 24.10.x x86_64。
-triggers:
-  - "passwall 更新"
-  - "passwall 版本"
-  - "ipk 转 run"
-  - "istore 安装 ipk"
-  - "opkg hold"
-  - "路由器 ssh"
+description: 'PassWall update on iStoreOS: direct opkg, no ipk->run.'
+version: 1.0.0
+author: 50.110 bot
+license: MIT
+platforms: [windows, linux]
+tags: [istoreos, openwrt, passwall, opkg, ttyd, router, websocket]
+metadata:
+  hermes:
+    tags: [istoreos, openwrt, passwall, opkg]
+    triggers: ["passwall 升级", "ipk 转 run", "istore run 格式", "passwall 26.8", "iStoreOS 更新插件", "ttyd 无法输出", "ttyd websocket 协议", "ttyd 没有输出"]
 ---
 
-# iStoreOS PassWall 更新与排查
+# iStoreOS PassWall 升级 & ipk/run 问题
 
-## 核心事实(踩过的坑)
+## When to Use
 
-1. **ipk 不用转 run**:iStore/iStoreX 本地安装原生支持 ipk(商店逻辑:`.run` 直接执行、其余一律 `opkg install`)。PassWall 本来就是 opkg 装的 → 直接 `opkg install` 升级即可,无需转换。
-2. **PassWall 官方仓库已迁移**:`xiaorouji/openwrt-passwall` 已 404 → 新地址 **`Openwrt-Passwall/openwrt-passwall`**。版本号 = 日期式 `YY.M.P`(如 26.8.12 = 2026-08-12)。
-3. **PassWall 自带"检查更新"只提示不自更**:"最新版本 X,目前暂不支持自动更新,请自行编译或下载 ipk 手动安装"——这是插件正常行为,不是故障。
-4. **选 ipk 匹配 OpenWrt 版本**:仓库 release 资产带 `23.05-24.10` 后缀,须选与路由器 OpenWrt 大版本匹配的(24.10 路由器选 23.05-24.10 包)。
-5. **615 个固件自带包被 hold**(opkg flags=0x202):iStoreOS 锁住官方源包防顶掉定制组件。这些包 opkg 报"不能更新"是**正常的,不要强升**。
-6. **路由器 SSH 是非标准端口**(dropbear,非 22):本机免密用 `~/.ssh/id_ed25519`,公钥写在 `/etc/dropbear/authorized_keys`(**不是** /root/.ssh)。
-7. **ttyd 7681 无鉴权开放**(软路由 Web 终端)——安全隐患,建议加鉴权或关闭。
+- 用户问 PassWall 怎么升级 / 提示"暂不支持自动更新" / 看到版本号 `26.x.y`
+- 用户问 ipk 能不能转成 iStore 的 .run 格式(答案:不需要,本地安装原生支持 ipk)
+- 需要通过免密网页终端(ttyd)操作路由器,或 ttyd 连上但收不到输出
+- 需要在 Windows 侧无 sshpass 时做密码 SSH 登录
 
-## 升级流程(opkg 直装,已验证 26.7.1 → 26.8.12-r1)
+## 核心事实(先记住)
 
-```bash
-# 0. 免密登录(或用密码)
-ssh -p <SSH_PORT> root@<ROUTER_IP>
+1. **ipk 不需要转 run**:iStoreX/iStore「本地安装」原生支持 .ipk。源码证据:`linkease/istore` 仓库 `luci/luci-app-store/root/bin/is-opkg` 的 `dotrun()` 函数:文件名以 `.run` 结尾 → 直接执行;其他 → `opkg install "$path"`(apk 系用 `apk add --allow-untrusted`)。所以商店上传 ipk 即可,转 .run 纯属多余。
+2. **PassWall 上游仓库已迁移**:`xiaorouji/openwrt-passwall` → **`Openwrt-Passwall/openwrt-passwall`**(旧地址 GitHub API 404)。版本号现在是日期式 `YY.M.P`(如 26.8.12 = 2026-08-12 发布)。
+3. **Release 资产按 OpenWrt 版本分类**:`22.03-` / `23.05-24.10` / `25.12+`(.apk 格式)。iStoreOS 24.10 选 `23.05-24.10_luci-app-passwall_<ver>_all.ipk`。
+4. **PassWall 内置版本检查**读取 `Openwrt-Passwall/openwrt-passwall-packages` release 的 api-cache JSON(见路由器 `/usr/lib/lua/luci/passwall/com.lua`),提示"暂不支持自动更新"是正常的——它只查版本,不给 ipk。
 
-# 1. 查当前版本
-opkg list-installed | grep passwall
-
-# 2. 下载两个 ipk(GitHub release 资产,选 23.05-24.10):
-#    luci-app-passwall_<ver>.ipk
-#    luci-i18n-passwall-zh-cn_<ver>.ipk
-# 3. 传到路由器 /tmp
-scp -P <SSH_PORT> luci-app-passwall_*.ipk luci-i18n-passwall-zh-cn_*.ipk root@<ROUTER_IP>:/tmp/
-
-# 4. 备份配置(重要!)
-ssh -p <SSH_PORT> root@<ROUTER_IP> "cp /etc/config/passwall /etc/config/passwall.bak-$(date +%Y%m%d)"
-
-# 5. 安装(自动解析依赖;缺依赖时先 opkg update 再装)
-ssh -p <SSH_PORT> root@<ROUTER_IP> "opkg update && cd /tmp && opkg install luci-app-passwall_*.ipk luci-i18n-passwall-zh-cn_*.ipk"
-
-# 6. 重启服务并验证
-ssh -p <SSH_PORT> root@<ROUTER_IP> "/etc/init.d/passwall restart && opkg list-installed | grep passwall"
-```
-
-**依赖坑**:缺依赖时(如 `microsocks`)从官方源 `opkg install microsocks` 补装,不要降级。
-
-**验证**:`opkg list-installed | grep passwall` 显示新版本;`pgrep -f sing-box`、`pgrep -f chinadns-ng` 等核心进程在跑。**不要动 xray-core 等二进制**,新版 ipk 不硬依赖具体版本。
-
-## 每周自动更新(只更非锁定包)
+## 升级流程(实测 26.7.1 → 26.8.12,2026-08-12)
 
 ```bash
-# /root/opkg-weekly-update.sh(已部署,日志 /root/opkg-weekly-update.log)
-# cron: 30 4 * * 1  bash /root/opkg-weekly-update.sh
-# 逻辑:opkg update → 只升级非 hold 包(615 个锁定包自动跳过)
+# 1. 查最新版本和资产(GitHub API)
+curl -s "https://api.github.com/repos/Openwrt-Passwall/openwrt-passwall/releases?per_page=3" | jq '.[].tag_name'
+
+# 2. 下载匹配固件的 ipk(以 iStoreOS 24.10 / x86_64 为例)
+curl -sL -o /tmp/luci-app-passwall.ipk \
+  "https://github.com/Openwrt-Passwall/openwrt-passwall/releases/download/<TAG>/23.05-24.10_luci-app-passwall_<VER>-r1_all.ipk"
+curl -sL -o /tmp/luci-i18n-passwall-zh-cn.ipk \
+  "https://github.com/Openwrt-Passwall/openwrt-passwall/releases/download/<TAG>/23.05-24.10_luci-i18n-passwall-zh-cn_<VER>_all.ipk"
+
+# 3. 检查依赖(ipk 是 tar.gz:tar xzf 后 tar xzf control.tar.gz,cat control 看 Depends)
+# 26.8.12 硬依赖: chinadns-ng, dnsmasq-full, ip-full, luci-compat, luci-lua-runtime,
+#   microsocks, dns2socks, resolveip, tcping, lyaml, coreutils-* — 不依赖 xray-core 版本
+# 缺的用 opkg install 补(microsocks 在官方 packages 源)
+
+# 4. 备份配置(升级不动配置,但备份防手滑)
+cp /etc/config/passwall /etc/config/passwall.bak-$(date +%Y%m%d)
+
+# 5. 上传并安装(scp 到 /tmp 后)
+opkg install /tmp/luci-app-passwall.ipk /tmp/luci-i18n-passwall-zh-cn.ipk
+# "Collected errors: resolve_conffiles ... 新文件另存为 -opkg" 是正常提示
+# (用户改过的规则文件被保留,新版另存),不是安装失败
+
+# 6. 重启验证
+/etc/init.d/passwall restart
+opkg list-installed | grep passwall        # 应显示 26.8.12-r1
+pgrep -af "sing-box|xray|chinadns"        # 核心进程在跑
 ```
 
-## 排查速查
+回滚:从 GitHub release 的旧 tag(如 `26.7.1-1`)下载同款 ipk 重装。
 
-| 症状 | 原因 | 处理 |
-|------|------|------|
-| "暂不支持自动更新" | 插件正常行为 | 手动下载 ipk 装(见上) |
-| opkg 报"不能更新" | 固件 hold 锁定 | 正常,跳过 |
-| PassWall 网页打不开 | 服务没起来 | `/etc/init.d/passwall restart` |
-| WebUI 在反代后 | Lucky 反代 | http://<ROUTER_IP>:<LUCKY_PORT>/<user>/ |
+## ttyd 1.7.x WebSocket 协议(免密网页终端)
 
-## 安全
+坑:裸 WS 连上(101)但**永远收不到输出** —— 因为缺子协议。
 
-- 端口 22 外网暴露?软路由在内网,dropbear 非标端口 + 公钥免密已配,密码登录建议关闭
-- ttyd(7681)无鉴权,任何人进局域网都能开 Web 终端——**建议加鉴权或关闭**
+```python
+import asyncio, websockets, json
+async def main():
+    async with websockets.connect("ws://HOST:7681/ws",
+                                  subprotocols=["tty"],      # 关键!缺了这个零输出
+                                  ping_interval=None) as ws:
+        await ws.send("1" + json.dumps({"cols": 120, "rows": 30}))  # resize: "1"+json
+        await ws.send("0echo hi\n")                                  # 输入: "0"+data
+        out = await ws.recv()
+asyncio.run(main())
+```
 
-## 凭证
+- 客户端→服务端:文本帧 `"0"+输入数据`;resize 帧 `"1"+JSON`
+- 子协议必须带 `["tty"]`,否则连接存活、ping 正常,但终端不产生任何输出
+- 1.7.3 服务端指纹:`server: ttyd/1.7.3 (libwebsockets/4.3.3-unknown)`;页面 664KB(内联 xterm.js)
+- 注意:某些 ttyd 实例即使协议正确也可能无输出(如被 LuCI 鉴权改造过)——遇到就换 SSH 路径
 
-路由器 root 密码、SSH 端口等敏感值:**存在 gbrain(`concepts/net-topology`),不写进本仓库(公开仓库)**。
+## Windows 侧 SSH 免密/密码技巧
+
+- 密码登录无 sshpass 时:写 `askpass.sh`(`#!/bin/sh\necho '密码'`),然后
+  `SSH_ASKPASS=/c/Users/ianle/askpass.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0 ssh -p PORT root@HOST 'cmd'`
+- 公钥免密:本机 `~/.ssh/id_ed25519` 公钥追加到路由器 `/etc/dropbear/authorized_keys`
+  (dropbear 无 AuthorizedKeysFile 配置时默认回退 `$HOME/.ssh/authorized_keys`;
+  OpenWrt LuCI 管理权页面写入的就是这个文件;别在 `/root/.ssh/` 里找,host key 在 /etc/dropbear/)
+- 传文件:`SSH_ASKPASS=... scp -P PORT file root@HOST:/tmp/`
+- 临时 askpass 脚本用完即删(含密码明文),删除用 Python os.remove 或 cmd del,注意 MSYS 引号坑
+
+## Windows OpenSSH Server 坑(50.110 实测 2026-08-12)
+
+- 安装:winget 装 Microsoft.OpenSSH 失败(exit -1978335212)时,直接下载
+  PowerShell/Win32-OpenSSH release 的 MSI(curl -o 用 `C:/...` 原生路径,`/c/...` 会被 Windows curl 吃掉),
+  msiexec /i xxx.msi /qn 即可
+- **管理员组成员用户的钥匙必须放 `C:\ProgramData\ssh\administrators_authorized_keys`**,
+  不是 `~/.ssh/authorized_keys`!sshd_config 的 `Match Group administrators` 分支强制换文件;
+  文件 ACL 必须 `/inheritance:r` + 仅 SYSTEM/Administrators 有权,否则 preauth 直接拒绝
+- 排查:改 sshd_config `LogLevel VERBOSE` + 重启,事件查看器 OpenSSH/Operational 给确切原因
+  ("Failed publickey ... " / "no hostkeys")
+- 防火墙只放行局域网:`New-NetFirewallRule -RemoteAddress 192.168.50.0/24`
+- 50.161 臣妹访问 50.110 的钥匙:ianle168@gmail.com 那把公钥已写入(2026-08-12)
+
+## Open-Box 透明代理安装坑(2026-09-08 实测)
+
+- 安装包缺陷:Open-Box(liandu2024/Open-Box)release tar 内文件权限是 600,
+  install.sh cp 铺装后 /www/luci-static/.../openbox/status.js、
+  /usr/share/luci/menu.d/、/usr/share/rpcd/acl.d/ 全是 600 root:root →
+  uhttpd 读不了,Luci 页面报 `HTTP 403 while loading class file .../status.js`。
+  症状像没自启,实际服务正常(procd running + node 在跑 + 2026 监听)。
+- 修复:chmod 644 三个目标文件 + init.d 755;
+  还要 chmod -R a+rX /opt/open-box/openwrt/luci 修源文件,否则 update.sh
+  重铺后 403 复发。
+- 检查端口用 netstat -tlnp,BusyBox 无 ss 命令(ss 误报 NO_LISTEN)。
+- 安装/升级前:该机 passwall 常驻启用,Open-Box 启内核前必须停 passwall,双透明代理会抢防火墙/DNS。
+- 面板 http://192.168.50.5:2026,首次访问强制设管理密码;LuCI 兜底页在 服务→Open-Box。
+- SSH 直连 GitHub raw 可达(301 正常),78MB 资产下载建议 --mirror(ghfast.top 已验证可用)。
+
+## 环境备忘(50.110 实测)
+
+- iStoreOS: 192.168.50.5, dropbear 端口 64891, root, 本机公钥已授权
+- 固件: iStoreOS 24.10.8 (OpenWrt 24.10), x86_64, 内核 6.6.144, 商店 = istorex
+- opkg 源: 官方 cernet 镜像 + `istore_compat https://istore.istoreos.com/repo/all/compat`(空壳 dummy 包,别指望它有 passwall)
+- ttyd 7681 无鉴权开放是安全隐患;用完提醒用户关掉或加鉴权
