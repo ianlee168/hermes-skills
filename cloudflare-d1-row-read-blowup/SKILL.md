@@ -23,6 +23,31 @@ Free tier = **5,000,000 rows read/day**, reset at **00:00 UTC**. Data is never
 lost; only reads fail. The limit is enforced on rows actually touched, so a
 `SELECT 1` or a `sqlite_master` query still succeeds while a real scan fails.
 
+## Attribute the usage to a SQL statement first
+
+`d1QueriesAdaptiveGroups` has a **`query` dimension** (plus `error`), so you can get
+per-statement `rowsRead` — endpoint-level attribution without Workers Logs or Logpush.
+(The older `d1AnalyticsAdaptiveGroups` exposes only `databaseId/databaseRole/date/datetime*`;
+do not conclude "analytics cannot attribute" from that one.)
+
+```graphql
+{ viewer { accounts(filter: {accountTag: "<acct>"}) {
+    d1QueriesAdaptiveGroups(limit: 200, filter: {date: "<YYYY-MM-DD>", databaseId: "<db>"},
+      orderBy: [count_DESC]) { count sum { rowsRead rowsWritten }
+      dimensions { datetimeHour query error } } } } }
+```
+
+Bucket the result by `datetimeHour`: a cron-driven ingest produces one enormous hour and
+almost nothing elsewhere, while organic traffic spreads evenly across the day. Arithmetic
+check: `rowsRead_of_a_statement / table_rows` ≈ how many times that statement full-scanned;
+if that matches its call count, the statement is doing an unindexed scan on every call.
+
+**Aggregate before blaming a route.** On a news/crawler site the ingest dedupe loop
+(`SELECT id FROM t WHERE url = ?`, once per fetched item) can be 90%+ of the day's row
+reads — ~390 calls x 26k rows = 10.2M, dwarfing the homepage's category queries (~5%).
+A page-render-based estimate ("N page views burn the quota") is then wrong by an order of
+magnitude, and the site goes down **with zero visitors**.
+
 ## Diagnose (cheap, no LLM guessing)
 
 1. Get the D1 database size and row count. The `/query` endpoint's
@@ -169,8 +194,20 @@ trailing blank lines.
   first) before deploying.
 - Strip the multipart trailer before syntax-checking a downloaded bundle, or
   `node --check` fails on the trailing `--<boundary>--` line.
+- **`EXPLAIN QUERY PLAN <hot statement>` is free** (`rows_read: 0` — it succeeds even
+  while the quota is blown) and is the ground truth that an index is really live. Recipe:
+  run it for every hot statement, require `USING INDEX`/`USING COVERING INDEX` in each plan,
+  then curl the public route.
+- **"A cron is scheduled to fix it" is not a fix.** A remediation job that ran with a
+  `--dry-run` flag, or was deleted before it ever fired, leaves the rule doc claiming
+  success while usage stays at 2x quota — two more days of downtime. Land the DDL, verify
+  it with EXPLAIN, and make the job silent-when-healthy / loud-when-failed.
 - Don't create the `stats` table by hand during an outage — the CREATE is
   blocked by the same read limit; put it in the post-reset job.
+- **Sequence the remediation into the reset window.** DDL is blocked while over quota, so
+  schedule it as a cron at ~00:05 UTC (just after the 00:00 UTC reset) with a few retries,
+  and place it *before* the daily ingest cron (e.g. ingest at 03:00 UTC) — otherwise the next
+  ingest re-blows the quota before the index exists.
 - The `/content` response is **CRLF**-terminated. Normalise line endings
   (Python `splitlines()`, then join with `\n`) before hashing, or the same
   module yields two different sha256 values and your baseline pin becomes
@@ -181,5 +218,8 @@ trailing blank lines.
 
 ## Scripts
 
+- `scripts/d1_index_apply.py` — land the missing indexes (idempotent, retries through a
+  still-locked quota) and prove it with `EXPLAIN QUERY PLAN`; `--quiet-if-done` makes it a
+  silent-when-healthy cron. Edit the `INDEXES`/`PROBES` constants per project.
 - `scripts/cf_worker_put.sh` — upload a pre-bundled ES-module Worker, with the
   required `filename=` form field baked in.
