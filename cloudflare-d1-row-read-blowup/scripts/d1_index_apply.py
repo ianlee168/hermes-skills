@@ -65,6 +65,34 @@ def d1(sql):
     return first, None
 
 
+# Build cost gate: free tier is 100,000 rows_written/day (a SEPARATE limit from rows read).
+# Creating an index writes one row per table row per index, so a rebuild on a big table can
+# exhaust the day's write budget by itself (26k rows x 3 indexes = 78k = 79% of the cap).
+WRITE_GUARD = int(os.environ.get('D1_WRITE_GUARD', '90000'))
+TABLE_INDEXES = [i for i in INDEXES if ' ON posts(' in i]
+
+
+def write_cost_guard():
+    """Estimate the write cost of the DDL and refuse above the safety line.
+
+    True = go ahead, False = refuse (a rebuild would blow rows_written and 500 the site).
+    """
+    r, err = d1('SELECT COUNT(*) AS n FROM posts')  # EDIT ME: the table being indexed
+    if r is None:
+        print(f'  write-cost estimate failed ({err[:100]}) -- proceeding unverified')
+        return True
+    rows = ((r.get('results') or [{}])[0] or {}).get('n') or 0
+    est = rows * len(TABLE_INDEXES)
+    print(f'  write cost: {rows:,} rows x {len(TABLE_INDEXES)} indexes = {est:,} rows_written'
+          f' ({est / 100000 * 100:.1f}% of the 100,000/day cap)')
+    if est > WRITE_GUARD:
+        print(f'  REFUSING: estimate {est:,} exceeds safety line {WRITE_GUARD:,} (cap 100,000)')
+        print('  A rebuild here would exhaust rows_written and take the site down.')
+        print('  Do one index per day instead.')
+        return False
+    return True
+
+
 def plan_uses_index():
     """EXPLAIN QUERY PLAN costs 0 rows read, so it works even under a blown quota."""
     ok_all, lines = True, []
@@ -94,6 +122,7 @@ def site_code(url):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--dry-run', action='store_true', help='estimate the rebuild write cost only')
     ap.add_argument('--quiet-if-done', action='store_true')
     ap.add_argument('--max-attempts', type=int, default=4)
     ap.add_argument('--retry-wait', type=int, default=150)
@@ -103,6 +132,15 @@ def main():
         return 1
 
     done, lines = plan_uses_index()
+
+    if args.dry_run:
+        print(f'current state: {"indexes in place" if done else "indexes MISSING (a rebuild would really write)"}')
+        for label, txt in lines:
+            print(f'  {label}: {txt}')
+        ok = write_cost_guard()
+        print('  [dry-run] no DDL executed')
+        return 0 if ok else 1
+
     if done:
         if args.quiet_if_done:
             return 0
@@ -114,6 +152,9 @@ def main():
         print('hot statements still SCAN (indexes missing):')
         for label, txt in lines:
             print(f'  {label}: {txt}')
+        return 1
+
+    if not write_cost_guard():
         return 1
 
     print('landing indexes (DDL is rejected while over quota, hence retries)')

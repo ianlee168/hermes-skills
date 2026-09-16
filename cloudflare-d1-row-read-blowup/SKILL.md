@@ -78,6 +78,37 @@ magnitude, and the site goes down **with zero visitors**.
      `SELECT SUM(col) FROM t`, `SELECT * FROM t ORDER BY <unindexed> DESC LIMIT n`.
    - A loop over N categories each running its own `ORDER BY ... LIMIT` query.
 
+## There are TWO daily free-tier limits — the fix can blow the other one
+
+| Resource | Free tier / day | What eats it |
+|---|---|---|
+| rows_read | 5,000,000 | unindexed scans |
+| **rows_written** | **100,000** | INSERT/UPDATE + **CREATE INDEX** |
+
+Either one exceeded gives the same outage until 00:00 UTC.
+
+**An index build writes one row per table row per index.** Measured on a 26,130-row table:
+3 indexes = 78,390 rows written = **79% of the whole daily write budget in one shot** —
+Cloudflare emailed a "79% of your daily operation limit" notice about a remediation the
+agent had just run. Baseline write volume on a small site is ~200-450 rows/day, so the
+index build is 200x the normal day.
+
+Consequences worth designing for:
+
+- **The rebuild wall scales with the table.** At ~33k rows a 3-index rebuild = ~99k writes
+  = the daily cap; beyond that the rebuild itself would take the site down. Budget it:
+  one index per day instead of all of them.
+- **`CREATE INDEX IF NOT EXISTS` on an existing index costs 0 reads and 0 writes**
+  (`rows_written: 0, changed_db: false` — verified live), so an idempotent daily
+  check-and-apply job does not burn the write budget on healthy days.
+- **Gate the DDL on an estimate.** Before creating, `SELECT COUNT(*)`, multiply by the
+  number of indexes, and refuse above a safety line (e.g. 90,000) with a message telling
+  the operator to split it across days. Refusing loudly beats a half-built index set plus
+  a dead site.
+- A "79% of rows_written" notice that lands right after a remediation is a *self-inflicted*
+  one-time cost, not a new leak — check the per-query `rowsWritten` attribution before
+  hunting for a new writer. (Same recipe as reads: group `d1QueriesAdaptiveGroups` by `query`.)
+
 ## Fix
 
 Order matters: **DDL is blocked while over quota** (CREATE TABLE / CREATE INDEX
