@@ -61,6 +61,30 @@ pgrep -af "sing-box|xray|chinadns"        # 核心进程在跑
 
 回滚:从 GitHub release 的旧 tag(如 `26.7.1-1`)下载同款 ipk 重装。
 
+## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
+
+升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
+
+1. **`opkg install` 期间**断一次 —— 所以安装命令必须 `nohup ... &` 后台跑,再重连查 `/tmp/pw-install.log`,
+   别在前台等(前台等会拿到空输出 + 255,误以为失败)。
+2. **`/etc/init.d/passwall restart` 期间**断一次 —— restart 会重置 NAT/防火墙表,把已建立的 SSH 连接打断。
+   因此**不要把 restart 和验证写在同一条 SSH 命令里**(验证部分永远拿不到执行),分两条:
+   先 restart(断就断),再重连 `sleep 20` 后做验证。
+
+```sh
+# 后台装 + 轮询(用 -x 精确匹配,pgrep -f 会匹配到自己那条 sh -c 永不退出)
+nohup sh -c "opkg install /tmp/luci-app-passwall.ipk /tmp/luci-i18n-passwall-zh-cn.ipk > /tmp/pw-install.log 2>&1" >/dev/null 2>&1 &
+i=0; while [ $i -lt 25 ]; do pgrep -x opkg >/dev/null 2>&1 || break; sleep 10; i=$((i+1)); done
+tail -12 /tmp/pw-install.log
+```
+
+- 资产名规律两次一致:`23.05-24.10_luci-app-passwall_<VER>-r1_all.ipk`(app 带 `-r1`)、
+  `23.05-24.10_luci-i18n-passwall-zh-cn_<VER>_all.ipk`(i18n 不带),tag = `<VER>-1`。
+- `resolve_conffiles ... 新文件另存为 -opkg`(direct_host / proxy_host)是正常提示:用户改过的规则保留,
+  新版存为 `*-opkg`。不要拿新版去覆盖用户的(用户的域名清单才是他要的)。
+- 验证三件套:`opkg list-installed | grep passwall` + `/etc/init.d/passwall enabled` +
+  `curl -o /dev/null -w "%{http_code}" https://www.google.com`(经代理应 200)。
+
 ## ttyd 1.7.x WebSocket 协议(免密网页终端)
 
 坑:裸 WS 连上(101)但**永远收不到输出** —— 因为缺子协议。
