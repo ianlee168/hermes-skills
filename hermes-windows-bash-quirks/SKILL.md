@@ -85,9 +85,8 @@ correct response for each.
 - **别把 `$TMPDIR` / Hermes scratch 目录当主动落脚点**:它们都在 C 盘
   (`…\hermes\cache\scratch`),只适合"工具自己生成、72 小时自动回收"的东西。
   凡是**我为测试而主动写**的文件 → 一律 D 盘。
-- 各盘现况(2026-09-22 实测):C 1.8T/可用 1.0T(系统)、D 3.7T/2.3T(电影,
-  已有 `hermes-cache`)、E 1.7T/0.6T、F 3.7T/0.9T(appdata 备份盘)、
-  G 0.9T/0.9T、H 1.8T/0.7T(游戏 + `H:\dev`:bun/npm/ollama 模型)。
+- **就 D 盘,别再找别的盘**(2026-09-22 定):C 盘禁用,其它盘也不用挑——
+  D 盘 3.7T/可用 2.3T,固定用 `D:\hermes-test`。不要再列盘、不要征询落点。
 - 只有**必须给原生 Windows 程序读**时才用 `$LOCALAPPDATA\Temp`(少数 MSYS 路径
   翻译坑需要,见下文 curl/tar 条目),并在同一会话里清掉。
 
@@ -728,7 +727,7 @@ translation.** Hit on 50.110 with rclone (WinGet build): `rclone config
 create unraid sftp ... key_file /c/Users/<user>/.ssh/id_rsa` stores the
 literal `/c/...` string and fails at use with "failed to read private
 key file ... The system cannot find the path specified". Fix: pass the
-native form `C:/Users/<user>/.ssh/id_rsa` (forward slashes, no MSYS
+native form `C:/Users/ianle/.ssh/id_rsa` (forward slashes, no MSYS
 `/c/` prefix) in the config value. Related: **Windows rclone reads
 `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone`** — so
 `rclone listremotes` in git-bash shows nothing even when WSL has
@@ -843,7 +842,7 @@ with the native form landed the file correctly:
 curl -sL -o /c/Users/<user>/OpenSSH-Win64.msi "https://.../file.msi"
 
 # ✅ lands correctly — native Windows path, forward slashes
-curl -sL -o "C:/Users/<user>/OpenSSH-Win64.msi" "https://.../file.msi"
+curl -sL -o "C:/Users/ianle/OpenSSH-Win64.msi" "https://.../file.msi"
 ```
 
 **Rule: pass `C:/...` (or a plain relative filename in the right cwd)
@@ -888,7 +887,7 @@ bitsadmin or a direct path argument that avoids MSYS translation.
 To check where `/tmp` maps on this system:
 ```bash
 mount | grep temp
-# → C:/Users/<user>/AppData/Local/Temp on /tmp type ntfs (binary,noacl,...)
+# → C:/Users/ianle/AppData/Local/Temp on /tmp type ntfs (binary,noacl,...)
 ```
 
 Even with this knowledge, do NOT rely on `/tmp/` for inter-session
@@ -906,10 +905,10 @@ A non-exhaustive list of Windows-bash gotchas that come up:
 - **Spaces in `Program Files`-style paths need quoting.** Always.
   `'C:/Program Files/Foo/bar.exe'` not `C:/Program Files/Foo/bar.exe`.
 - **`/tmp/` maps to `%TEMP%` on 50.110** — verify with `mount | grep temp`
-  (→ `C:/Users/<user>/AppData/Local/Temp` on /tmp). Do NOT assume `C:\tmp\`;
+  (→ `C:/Users/ianle/AppData/Local/Temp` on /tmp). Do NOT assume `C:\tmp\`;
   the mapping was confirmed via `cd /tmp && pwd -W` (2026-08-13). If you
   need a path a NATIVE tool must read, prefer `$LOCALAPPDATA/Temp` or
-  `C:/Users/<user>/...` explicitly.
+  `C:/Users/ianle/...` explicitly.
 - **一个 stdin 只能喂第一个 `cat >`（2026-09-11 实测）。**
   `ssh host 'cat > a.conf; cat > b.conf' < local` 只有 a.conf 拿到内容，b.conf 是
   **0 字节空文件**（后续 cat 读到 EOF 直接退出，退出码仍为 0，毫无提示）。
@@ -954,8 +953,8 @@ A non-exhaustive list of Windows-bash gotchas that come up:
   ```bash
   "/c/Users/<user>/AppData/Local/Google/Chrome/Application/chrome.exe" \
     --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1.5 \
-    --window-size=1400,900 --screenshot="C:/Users/<user>/AppData/Local/Temp/out.png" \
-    "file:///C:/Users/<user>/AppData/Local/Temp/in.svg"
+    --window-size=1400,900 --screenshot="C:/Users/ianle/AppData/Local/Temp/out.png" \
+    "file:///C:/Users/ianle/AppData/Local/Temp/in.svg"
   ```
   `--screenshot=` 的值和 `file:///` 后的路径都必须是**原生 `C:/...` 形式**(bash 的 `/c/...` 传给原生
   程序不翻译);输出文件名别和源文件同名(会自我覆盖);渲染完交给视觉工具读图,要给用户看就 `MEDIA:<绝对路径>`。
@@ -1032,11 +1031,11 @@ A non-exhaustive list of Windows-bash gotchas that come up:
   Editing a file under `/tmp/` (e.g. a git clone at `$LOCALAPPDATA/Temp/...`)
   with the patch tool may return `resolved_path: \tmp\...` plus an "OUTSIDE
   the active workspace" warning — the write still lands in bash's real `/tmp`
-  (= `C:/Users/<user>/AppData/Local/Temp`, same mapping as `cd /tmp`). Don't
+  (= `C:/Users/ianle/AppData/Local/Temp`, same mapping as `cd /tmp`). Don't
   chase the displayed path (a drive-root `C:\tmp\...` there usually does NOT
   exist) and don't redo the edit; confirm the change with `git status` +
   grep inside the actual repo. To skip the scare entirely, pass the native
-  `C:/Users/<user>/AppData/Local/Temp/...` path to the tool in the first place.
+  `C:/Users/ianle/AppData/Local/Temp/...` path to the tool in the first place.
 - **patch tool refuses "Escape-drift detected" on CRLF files whose code contains backslash-n
   string escapes.** Editing a Windows-side script (CRLF endings) that prints things like
   backslash-n inside an f-string makes the patch tool compare backslash runs and bail with
