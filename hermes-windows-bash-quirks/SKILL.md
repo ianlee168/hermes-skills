@@ -90,6 +90,28 @@ correct response for each.
 - 只有**必须给原生 Windows 程序读**时才用 `$LOCALAPPDATA\Temp`(少数 MSYS 路径
   翻译坑需要,见下文 curl/tar 条目),并在同一会话里清掉。
 
+## 命令里出现 `sudo` = 在用户屏幕上弹密码框(2026-09-22 实测,两条命令问了两次)
+
+Hermes 终端工具看到命令里有**真实的 `sudo` 单词**(`tools/terminal_tool_sudo.py::
+_rewrite_real_sudo_invocations`)就会想替你喂密码:先把 `sudo` 改写成 `sudo -S -p ''`,
+再按顺序取密码——`.env` 的 `SUDO_PASSWORD` → 本会话缓存 → **弹窗问用户**
+(`tui_gateway/agent_callbacks.py` 注册 `set_sudo_password_callback`;桌面端 120s 超时)。
+弹窗期间**我的这次工具调用是被阻塞的**,用户不答就卡到超时。
+
+- **触发面比想象宽**:写在 `ssh host 'bash -s' <<'EOF' ... EOF` **heredoc 里的** `sudo`、
+  带 `-n` 的 `sudo`、只想"探一下免不免密"的 `sudo -n true` —— **全都会弹**。
+  (唯一的例外是引号内不是纯 sudo 词的,如 `grep -E "sudo|pam"`,因为含 `|` 不算
+  executable —— **别指望这点**,它随时可能改名。)
+- **本机(Win11)必然弹**:判免密的动作是 `sudo -n true`,而 Windows 自带
+  `C:\WINDOWS\system32\sudo.exe` 不认 `-n`(会回 "unexpected argument '-S' found")
+  → 探测失败 → 直接弹窗。这台机器上的 `sudo` 根本不是 Linux 那个 sudo,别拿来探测。
+- **规矩:命令里永远不出现 `sudo`。**
+  ① 要 root → `ssh root@<NAS_IP>`(有 key)或走该用户本就有权限的路径;
+  ② 读 `/var/log/*`、`/etc/cron.d` 之类**先试不带 sudo**再判断;
+  ③ 需要探测"要不要密码"就直接问用户,别用命令去试。
+- 万一真需要 sudo:先向用户说明要做什么、让他在交互终端输一次(Hermes 会**按会话缓存**,
+  同会话后续不再问)。**不要**建议把 sudo 密码塞进 `~/.hermes/.env`,更不要自己留一份。
+
 ## The 5 Block Patterns (and the right response)
 
 ### Block 1: `rm -rf` of brain / skill / config paths
