@@ -59,9 +59,12 @@ git stash -u && git pull --rebase && git stash pop
 git config user.name  "$(git log -1 --format='%an')"
 git config user.email "$(git log -1 --format='%ae')"
 
-# 7. 提交前自查(规则#3):grep 硬凭证
+# 7. 提交前自查(规则#3):只认真实 token 形状
+# ⚠️ 别用裸 "ghp_"/"sk-"/"token *=" 当模式:skill 正文里本来就有这些**说明性字样**
+#    (例如"密码、token(`ghp_`/`sk-`)一律占位化"),会 100% 假阳性把你卡住。
 git add -A
-git diff --cached | grep -inE "q1w2e3|18612798714|R4e3|ghp_|sk-[a-z]|password *=|密码 *=|token *= " && echo "⚠️ 有疑似凭证" || echo "✅ 干净"
+git diff --cached | grep -inE "gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY" \
+  && echo "⚠️ 有真实凭证形状" || echo "✅ 干净"
 
 # 8. commit + push
 git commit -q -m "feat: <说明>"
