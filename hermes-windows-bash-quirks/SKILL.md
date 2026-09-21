@@ -92,11 +92,22 @@ correct response for each.
 
 ## 命令里出现 `sudo` = 在用户屏幕上弹密码框(2026-09-22 实测,两条命令问了两次)
 
-Hermes 终端工具看到命令里有**真实的 `sudo` 单词**(`tools/terminal_tool_sudo.py::
-_rewrite_real_sudo_invocations`)就会想替你喂密码:先把 `sudo` 改写成 `sudo -S -p ''`,
-再按顺序取密码——`.env` 的 `SUDO_PASSWORD` → 本会话缓存 → **弹窗问用户**
-(`tui_gateway/agent_callbacks.py` 注册 `set_sudo_password_callback`;桌面端 120s 超时)。
-弹窗期间**我的这次工具调用是被阻塞的**,用户不答就卡到超时。
+命令里带**真实的 `sudo` 单词**会连环触发两道弹窗(2026-09-22 三轮实测钉死):
+
+1. **改写**:`_rewrite_real_sudo_invocations` 把 `sudo` 改成 `sudo -S -p ''`(为了用 stdin
+   喂密码)。改写**只在"手上有密码"时发生** —— 密码来源:`.env` 的 `SUDO_PASSWORD` →
+   本会话缓存 → **弹密码框问用户**(`tui_gateway/agent_callbacks.py` 注册回调,桌面端 120s)。
+2. **批准**:改写出来的 `-S` 正好命中 Hermes 自己的提权检测
+   (`tools/approval_detection.py`:"sudo with privilege flag (stdin/askpass/shell/list)")
+   → **每次都要求用户在 UI 上点批准**。工具返回值会明写
+   `Command required approval (...sudo with privilege flag...) and was approved by the user`。
+
+所以用户的体感是"总让我输 sudo 密码":**带 sudo 的命令每次都打断他要他批准**,
+手上没可复用密码时还额外弹密码框。判定硬证据:命令里那句 `sudo` 若真被改写,
+Windows 的 `sudo.exe` 会报 `error: unexpected argument '-S' found`(它不认 -S)。
+
+注意:sudo 藏在**脚本文件**里(`bash x.sh` 里的 sudo)我看不见 → 不触发这两道门,
+即"把 sudo 塞进脚本再跑"能绕过打断 —— 但那是钻空子,不是解法。
 
 - **触发面比想象宽**:写在 `ssh host 'bash -s' <<'EOF' ... EOF` **heredoc 里的** `sudo`、
   带 `-n` 的 `sudo`、只想"探一下免不免密"的 `sudo -n true` —— **全都会弹**。
