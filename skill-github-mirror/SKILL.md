@@ -25,7 +25,7 @@ triggers:
 
 1. **脱敏**:密码、token(`ghp_`/`sk-`)、小米账号、密钥路径一律 `<占位符>` 或"见 gbrain"。内网 IP/端口可保留(别的 agent 需要),硬凭证不留。
 2. **零硬编**:skill 里不写死具体 IP/OS/绝对路径,用 `<ROUTER_IP>` 这类占位符。
-3. **不写"陛下"**:称 "ianlee168" 或 "用户"。
+3. **不写"用户"**:称 "ianlee168" 或 "用户"。
 4. **README 归属表**:新目录必须在 `README.md` 的"目录归属"和"谁管什么"两张表各登记一行(50.110 Windows bot → 50.161 不审,直接推)。
 5. 改 smart-home/(50.1 bot)等他人目录前先读 README,遵守原归属。
 
@@ -33,9 +33,10 @@ triggers:
 
 ```bash
 # 1. 准备:确保 gh 已认证(gh auth status;keyring 登录 ianlee168)
-# 2. clone/复用工作区
-cd /tmp && rm -rf hermes-skills-github && git clone -q https://github.com/ianlee168/hermes-skills.git hermes-skills-github
-cd /tmp/hermes-skills-github
+# 2. clone/复用工作区（⚠️ 绝不用 /tmp —— 那是 C 盘；用 D:\hermes-test）
+mkdir -p /d/hermes-test && cd /d/hermes-test
+git clone -q https://github.com/ianlee168/hermes-skills.git hermes-skills-github   # 已存在就直接 cd 进去 git pull
+cd /d/hermes-test/hermes-skills-github
 
 # 3. 拷贝 skill:目录名 = skill 名,文件 = SKILL.md
 mkdir -p <skill-name>            # 或 smart-home/<skill-name> 等现有分类
@@ -74,7 +75,8 @@ gh api repos/ianlee168/hermes-skills/git/trees/main --jq '.tree[].path' | grep <
 ## 坑(都踩过)
 
 - **GitHub 有 ≠ 本地有**:skill 只在远程仓库,本 bot 的 skills_list 看不到 → 排查时永远不会被自动加载(2026-08-27 摄像头断流教训:现场从零瞎试直到用户提醒)。同步后按第 3.5 步复制到本地 skills 目录。
-- **Windows 上 `/tmp` = `C:/Users/ianle/AppData/Local/Temp`**——write_file 写"用户目录"和 git clone 到 /tmp 是两个地方,文件不会自动合并。要么全部在 /tmp 下操作,要么 copy 过去。
+- **工作区一律放 `D:\hermes-test`(绝不用 `/tmp`)。** Windows 上 `/tmp` = `C:/Users/<user>/AppData/Local/Temp`,而用户明令(2026-09-22):agent 的测试/临时文件**永不落 C 盘**。clone、抽取、脱敏脚本、比对产物全部在 D 盘;write_file 写"用户目录"和 git clone 到 /tmp 是两个地方,文件也不会自动合并。
+- **Windows 专属 skill 的绝对路径要脱敏成 `C:\Users\<user>`**,别把本机用户名推上公开仓库(整体替换,别手改)。`50.110` 这类内网主机号可保留。
 - **git 身份未配置**:`git commit` 报 "Author identity unknown" → 按第 6 步用仓库历史作者配置(ianlee168 <31464826+ianlee168@users.noreply.github.com>),别动全局配置。
 - **CRLF/LF**:patch 工具会把目标段换成 LF,git 会显示整文件改动但 diff 内容正确,不必纠结;拷贝新 SKILL.md 用 write_file(LF)即可。
 - **有未提交改动时 `git pull --rebase` 直接报错** → 先 stash -u(含 untracked)再 pull。
