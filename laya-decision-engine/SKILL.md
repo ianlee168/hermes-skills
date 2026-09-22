@@ -29,8 +29,9 @@ consumer GPU, 0 output tokens). Weights are open on the hub; three checkpoints i
 
 
 > Layout on this machine (substitute equivalents elsewhere): project scripts `<PROJECT_DIR>`,
-> dedicated venv `<VENV>`, HF weight cache `<HF_HOME>` and pip cache `<PIP_CACHE>` all live on a
-> non-C: data drive - C: holds Hermes only.
+> dedicated venv `<VENV>`, HF weight cache `<HF_HOME>`, pip cache `<PIP_CACHE>` and the local
+> secret files `<SECRETS_DIR>` all live on a non-C: data drive, except the canonical key file
+> under the Hermes home. C: holds Hermes itself only.
 
 ## Install (dedicated venv, caches OFF C:)
 
@@ -189,6 +190,44 @@ Pitfalls: warm up before quoting numbers; **toy-length batches lie** (69-token s
 measuring memory/time); the teacher's own self-agreement is the ceiling (the public set's
 `label_agreement` shows teacher argmax disagreement on whole rows); a guardrail on Chinese needs
 Chinese-labelled data. First milestone: run the public dataset end-to-end before touching your own.
+
+## Jev (cloud) deployed alongside Laya - verified
+
+Both engines are installed side by side in one venv (`typesafe-sdk` 0.7.1 + `laya`), so a question set
+can be run against either. Two calling routes, both verified working:
+
+- **SDK**: `from typesafe_sdk import TypeSafeClient; client.system_one(state=..., questions={...})`
+  reads `TYPESAFE_API_KEY`; response objects carry `.noul` / `.choice` / `.confidence` / `.usage`.
+- **Raw HTTP** (good for a copy-paste self-check): `POST https://api.typesafe.ai/v1/systemone`,
+  `Authorization: Bearer <key>`, body `{"state": ..., "model": "jev-latest", "questions": {...}}`,
+  response `{"model": "jev-1.13.0", "answers": {...}, "usage": {...}}`. Available models:
+  `jev-latest`, `jev-preview`.
+
+**Key handling** (learned the hard way - a masked/stale copy looks identical in chat but 401s):
+keep one canonical raw-key file on the machine, never echo the value, never write it into a repo or
+skill, and **re-verify with the raw-HTTP call after storing it** (expect HTTP 200 - and confirm the
+endpoint is not blanket-200 by checking a bogus key returns 401). This org's key is shared across
+agents, so quota is pooled; the raw key file path convention is a `secrets/` dir under the Hermes home.
+
+### Measured: Chinese, same 9 states x 5 questions (ground truth = unambiguous labels)
+
+| engine | department (choice) | urgency (score) | churn | jailbreak | phishing | total | p50 latency |
+|---|---|---|---|---|---|---|---|
+| **Jev `jev-latest` (API)** | 7/9 | **9/9** | **9/9** | **9/9** | 8/9 | **42/45 (93%)** | 300 ms |
+| Laya `multilingual` (local) | 4/9 | 7/9 | 7/9 | 7/9 | **9/9** | 34/45 (76%) | 30 ms |
+| Laya `english` (local) | 2/9 | 7/9 | 7/9 | 7/9 | 5/9 | 27/45 (60%) | 25 ms |
+
+So on Chinese the cloud model is clearly ahead (as the vendor's own routing story implies), the local
+`multilingual` checkpoint is respectable on detection tasks but weak on Chinese `choice` routing, and
+`english` is unusable on Chinese (it read a Chinese jailbreak as 0.91 churn). Cost measured: ~4901
+input tokens for those 9 calls = **$0.0002**; at ~550 tokens/call that is roughly **$23 per million
+classifications** ($0.042/1M input, output billed but trivial). Local Laya stays $0.
+
+**Guardrail thresholds are official but profile-specific.** In `llms-full.txt` TypeSafe ships a strict
+profile `{"review_threshold": 0.35, "action_threshold": 0.70, "severity_block": 2.0}` and a
+permissive one (`action_threshold: 0.85`); the confidence-routing pattern instead demonstrates a 0.6
+floor with per-action thresholds. Cite the profile you actually adopt, and remember the numbers are
+not portable to Laya's entropy confidence.
 
 ## Interop with TypeSafe Jev (same category, measured)
 
