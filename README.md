@@ -70,6 +70,10 @@ git push origin main
 4. **称呼** — 对陛下照写「陛下」，**不要为了脱敏把它改成「用户」**；机器人之间用 **110妹（50.110）/ 161姐（50.161）**，不要再互称「同事」。
 5. **先 dry run 再 push** — 改完跑一遍相关命令验证，再 commit。陛下 4 卷 → 王牌规矩"跑通 2 遍再写进 skill"。
 6. **通信通道约定（2026-09-06 定）** — Windows 台式机（50.110）侧推送一律走微信（weixin/iLink）；跑在 NAS 上的 Hermes VM（50.161）侧推送一律走 telegram。跨机迁移任务时发送通道随之切换（例：sp500 播报迁 50.161 后已改 telegram）。
+7. **动过 `git reset --soft/--mixed` 之后，提交前必须 `git status` 确认暂存区是空的** ——
+   留了基于旧树的 index 时，`git commit` 会把**别人的文件**一起回退/删掉。真实事故（2026-09-22 161姐 犯）：
+   一次 `reset --soft` 后的提交回退了 110妹 的 6 个 skill 内容、删掉她 3 个 laya-guard Windows 文件，
+   推上去才发现。补救 = 从出事前那个 commit 原样 `git checkout <sha> -- <paths>` 再提交；**别 force push**。
 
 ## 谁管什么 — 解释
 
