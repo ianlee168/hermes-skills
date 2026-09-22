@@ -40,10 +40,14 @@ if ! (cd "$GBRAIN_DIR" && timeout 240 "$BUN" src/cli.ts get "$SLUG" >"$tmp" 2>"$
   exit 1
 fi
 
-grep -oE 'apikey_[0-9a-f]+_[0-9a-f]+' "$tmp" | head -1 > "$tmp.out"
+grep -oE 'apikey_[0-9a-f]+_[0-9a-f]+' "$tmp" | head -1 > "$tmp.raw"
+# 规范字节形态：**不带尾部换行**（sha256 = 54d7fd29f7c5a121…，跨机对账时唯一形态；
+# 带换行的会变成 dd6de919…，而且直接拿去拼 HTTP 头会 401）
+printf '%s' "$(cat "$tmp.raw")" > "$tmp.out"
+rm -f "$tmp.raw"
 if [ -s "$tmp.out" ]; then
   install -m 600 "$tmp.out" "$OUT"
-  echo "synced $(wc -c < "$OUT") bytes -> $OUT (mtime $(date -r "$OUT" '+%F %T'))"
+  echo "synced $(wc -c < "$OUT") bytes -> $OUT (sha256 $(sha256sum "$OUT" | cut -c1-16)…)"
 else
   echo "error: 脑里那条 page 没有 apikey_ 字段" >&2
   exit 1
