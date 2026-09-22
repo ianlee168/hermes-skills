@@ -40,7 +40,9 @@ metadata:
                "& backgrounding refused", "Foreground command uses '&'",
                "xargs -P parallel probe", "pkill blocked",
                "test files on C: drive", "scratch file location",
-               "where do test files go", "D:\\hermes-test"]
+               "where do test files go", "D:\\hermes-test",
+               "HERMES_HOME not found", "env var not translated", "C:\\c junk tree",
+               "taskkill invalid argument //F", "Stop-Process by pid"]
     related_skills: [systematic-debugging, debugging-hermes-tui-commands,
                      gbrain-memory-architecture]
 ---
@@ -77,7 +79,7 @@ correct response for each.
 ## 硬规矩:测试/临时文件不许落 C 盘(2026-09-22 用户明令)
 
 **"你的测试文件今后永远不要用C盘!!!别的盘都可以"** —— C 盘只放 Hermes 自身
-(`C:\\Users\\<user>\AppData\Local\hermes`)与系统文件。
+(`C:\Users\<user>\AppData\Local\hermes`)与系统文件。
 
 - **默认落点:`D:\hermes-test\`**(已建,内含 README;D 盘 3.7T/可用 2.3T)。
   写脚本、抽样日志、转码中间产物、一次性校验文件、导出物……都放这里,按
@@ -454,7 +456,7 @@ continue from Step 3 (clone + install.sh)."
 ### WSL Pitfalls (all hit on 50.110)
 
 - ❌ **Path translation breaks Windows-mount scripts.** Inside WSL,
-  `C:\\Users\\<user>` is `/mnt/c/Users/<user>` (forward slashes, /mnt/
+  `C:\Users\<user>` is `/mnt/c/Users/<user>` (forward slashes, /mnt/
   prefix). When the script needs to read a Windows file, use
   `/mnt/c/...` not `C:\...`. Backslashes inside WSL bash are escape
   characters and will silently corrupt paths.
@@ -557,7 +559,7 @@ it's reversible (`mv` back).
 ### Level 2: `cmd.exe rd /s /q` (Windows native remove dir)
 
 ```bash
-cmd.exe //c "rd /s /q C:\\Users\\<user>\.gbrain\old-backup-20260604"
+cmd.exe //c "rd /s /q C:\Users\<user>\.gbrain\old-backup-20260604"
 ```
 
 **Use when:** You need to actually remove something, and the path
@@ -567,7 +569,7 @@ MSYS as a Unix path.
 
 For files (not dirs):
 ```bash
-cmd.exe //c "del /q C:\\Users\\<user>\file.txt"
+cmd.exe //c "del /q C:\Users\<user>\file.txt"
 ```
 
 **Why this works:** the gatekeeper pattern-matches on `rm`/`rm -rf`
@@ -580,8 +582,8 @@ match.
 # /c/tmp/clean.py
 import os, shutil
 targets = [
-    r"C:\\Users\\<user>\.gbrain\backup-1",
-    r"C:\\Users\\<user>\.gbrain\backup-2",
+    r"C:\Users\<user>\.gbrain\backup-1",
+    r"C:\Users\<user>\.gbrain\backup-2",
     r"C:\tmp\stale-file.txt",
 ]
 for t in targets:
@@ -605,7 +607,7 @@ contents, NOT for the `python` invocation. The gatekeeper blocks
 ### Level 4: PowerShell `Remove-Item` (force flag, native Windows)
 
 ```bash
-cmd.exe //c "powershell -Command \"Remove-Item -Path C:\\Users\\<user>\.gbrain\backup -Recurse -Force\""
+cmd.exe //c "powershell -Command \"Remove-Item -Path C:\Users\<user>\.gbrain\backup -Recurse -Force\""
 ```
 
 **Use when:** You need Windows-native semantics (e.g., junction
@@ -735,7 +737,7 @@ cmd.exe //c "powershell -ExecutionPolicy Bypass -File C:\tmp\vol.ps1"
 
 ```bash
 # ✅ WORKS — single-quoted -Command: bash leaves $lnk/$sh alone
-powershell -NoProfile -Command '$sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut("C:\\Users\\<user>\Desktop\X.lnk"); Write-Output ("Target: " + $lnk.TargetPath)'
+powershell -NoProfile -Command '$sh = New-Object -ComObject WScript.Shell; $lnk = $sh.CreateShortcut("C:\Users\<user>\Desktop\X.lnk"); Write-Output ("Target: " + $lnk.TargetPath)'
 ```
 
 (2026-08-14: the double-quoted form of exactly this failed with
@@ -760,7 +762,7 @@ translation.** Hit on 50.110 with rclone (WinGet build): `rclone config
 create unraid sftp ... key_file /c/Users/<user>/.ssh/id_rsa` stores the
 literal `/c/...` string and fails at use with "failed to read private
 key file ... The system cannot find the path specified". Fix: pass the
-native form `C:/Users/ianle/.ssh/id_rsa` (forward slashes, no MSYS
+native form `C:/Users/<user>/.ssh/id_rsa` (forward slashes, no MSYS
 `/c/` prefix) in the config value. Related: **Windows rclone reads
 `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone`** — so
 `rclone listremotes` in git-bash shows nothing even when WSL has
@@ -777,6 +779,29 @@ as a remote-host spec (like `host:path`) and list nothing; always cd +
 bare filename for tar operations.
 
 **Common pitfall 7:** Native `hermes` CLI (Windows Python app) does NOT get MSYS path translation for its own option values — `hermes backup -o /c/Users/x/out.zip` silently IGNORES the path and writes the zip into the current directory with just the basename (backup reports success; the file isn't where you asked). Hit 2026-09-03 while scripting the travel-pack. Fix: `cd` into the target dir first and pass a bare filename (`cd ~/pack && hermes backup -o hermes-backup-<date>.zip`), then verify the zip actually contains what you need (`unzip -l <zip> | grep memories/MEMORY.md`).
+
+**Common pitfall 8: MSYS does NOT translate paths inside ENVIRONMENT VARIABLES.** ARGV gets
+converted, env-var *values* do not: `HERMES_HOME="$HOME/AppData/Local/hermes" python x.py` (with
+`$HOME` = `/c/Users/<user>`) hands the native interpreter the literal string
+`/c/Users/<user>/AppData/Local/hermes`, which on Windows is a **relative path** → any code doing
+`Path(os.environ["HERMES_HOME"])` reads a directory that does not exist, and `mkdir` paths under it
+create a junk tree at `C:\c\Users\<user>\...` (a real 122 MB `C:\c\` litter pile on 50.110 came from
+this class of bug). The failure is **silent**: the program starts, finds nothing, and keeps going.
+
+```bash
+# ❌ python receives '/c/Users/<user>/AppData/Local/hermes' → not found
+HERMES_HOME="$HOME/AppData/Local/hermes" "H:/dev/venvs/x/python.exe" server.py
+
+# ✅ pass the native form explicitly (forward slashes are fine)
+HERMES_HOME='C:/Users/<user>/AppData/Local/hermes' "H:/dev/venvs/x/python.exe" server.py
+```
+
+Rule: **any env var that a native Windows program will treat as a path must be written
+`C:/...`/`H:/...` by hand** — never built from `$HOME`, `$PWD`, `$(cygpath ...)` output left
+unconverted. Verify by having the program itself print the resolved path, and when a service
+mysteriously "can't find its config/secret", check the env-var value it actually received BEFORE
+debugging the config logic — plus scan `C:\c\` once: an existing `/c/c/...` tree is the fingerprint
+of a previous agent session hitting this same trap.
 
 ## The "Did It Actually Work?" Verification Discipline
 
@@ -808,6 +833,23 @@ head -5 /c/Users/<user>/.hermes/skills/xiaohu-video-md/SKILL.md
 **If the command "succeeded" but verification shows the state didn't
 change:** the gatekeeper (or some other layer) silently no-op'd the
 command. Don't trust success — trust the post-state.
+
+### 用户说"验证 3 遍"时的标准打法
+
+这位用户不接受"我看过代码所以修好了"。被要求复查/验证 N 遍时,每轮换一种**客观证据**,别把同一件事说三遍:
+
+1. **代码级复现** —— 直接 `import` 生产模块、调那条真实函数(不要自己重写一份等价逻辑),
+   把每条输入→输出摆出来。测试必须**逐例独立**(会话级缓存/单例会把后几例掩盖成假绿,
+   实测踩过:同一个假回调拿到密码后进会话缓存,后面几例全部显示"没问",差点得出反向结论)。
+2. **真实痕迹** —— 日志 + `~/.hermes/state.db` 里的调用记录/耗时/返回值。数字说话:
+   “返回值里出现了被改写的痕迹 ⇒ 改写确实发生过”、“这条耗时是同类命令的 5 倍 ⇒ 当时卡在等人操作”。
+   查询手法见 `hermes-session-forensics`。
+3. **现场再造 + 等价验证** —— 安全的前提下**故意**把触发条件再造一次(真造故障,别只看退出码),
+   再用替代做法把同一件活干成,最后做**残留扫描**(脚本/定时任务里还有没有同类写法)。
+
+**每轮都要允许它推翻你上一轮的说法。** 数字与预期不符时,当场写“我上一轮说错了,准确说法是…”,
+并**回头改掉 skill 里那句错的表述**。三轮里一次自我修正都没有,通常说明你并没真在验证。
+(实测:第一轮“带 sudo 就会弹密码框”的结论,到第三轮才被修正为“弹的是批准门;密码框只在没有缓存时出现”。)
 
 ## Downloading Large Files on Windows: the curl path trap and bitsadmin escape
 
@@ -845,7 +887,7 @@ relies on is not installed. The cmdlet throws immediately.
 
 ```bash
 # ✅ WORKS — BITSADMIN version 3.0, always available
-bitsadmin /transfer "JobName" "https://example.com/large-setup.exe" "C:\\Users\\<user>\large-setup.exe"
+bitsadmin /transfer "JobName" "https://example.com/large-setup.exe" "C:\Users\<user>\large-setup.exe"
 ```
 
 Return value: `Transfer complete.` Exit code 0 on success.
@@ -875,7 +917,7 @@ with the native form landed the file correctly:
 curl -sL -o /c/Users/<user>/OpenSSH-Win64.msi "https://.../file.msi"
 
 # ✅ lands correctly — native Windows path, forward slashes
-curl -sL -o "C:/Users/ianle/OpenSSH-Win64.msi" "https://.../file.msi"
+curl -sL -o "C:/Users/<user>/OpenSSH-Win64.msi" "https://.../file.msi"
 ```
 
 **Rule: pass `C:/...` (or a plain relative filename in the right cwd)
@@ -920,7 +962,7 @@ bitsadmin or a direct path argument that avoids MSYS translation.
 To check where `/tmp` maps on this system:
 ```bash
 mount | grep temp
-# → C:/Users/ianle/AppData/Local/Temp on /tmp type ntfs (binary,noacl,...)
+# → C:/Users/<user>/AppData/Local/Temp on /tmp type ntfs (binary,noacl,...)
 ```
 
 Even with this knowledge, do NOT rely on `/tmp/` for inter-session
@@ -938,10 +980,10 @@ A non-exhaustive list of Windows-bash gotchas that come up:
 - **Spaces in `Program Files`-style paths need quoting.** Always.
   `'C:/Program Files/Foo/bar.exe'` not `C:/Program Files/Foo/bar.exe`.
 - **`/tmp/` maps to `%TEMP%` on 50.110** — verify with `mount | grep temp`
-  (→ `C:/Users/ianle/AppData/Local/Temp` on /tmp). Do NOT assume `C:\tmp\`;
+  (→ `C:/Users/<user>/AppData/Local/Temp` on /tmp). Do NOT assume `C:\tmp\`;
   the mapping was confirmed via `cd /tmp && pwd -W` (2026-08-13). If you
   need a path a NATIVE tool must read, prefer `$LOCALAPPDATA/Temp` or
-  `C:/Users/ianle/...` explicitly.
+  `C:/Users/<user>/...` explicitly.
 - **一个 stdin 只能喂第一个 `cat >`（2026-09-11 实测）。**
   `ssh host 'cat > a.conf; cat > b.conf' < local` 只有 a.conf 拿到内容，b.conf 是
   **0 字节空文件**（后续 cat 读到 EOF 直接退出，退出码仍为 0，毫无提示）。
@@ -986,8 +1028,8 @@ A non-exhaustive list of Windows-bash gotchas that come up:
   ```bash
   "/c/Users/<user>/AppData/Local/Google/Chrome/Application/chrome.exe" \
     --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1.5 \
-    --window-size=1400,900 --screenshot="C:/Users/ianle/AppData/Local/Temp/out.png" \
-    "file:///C:/Users/ianle/AppData/Local/Temp/in.svg"
+    --window-size=1400,900 --screenshot="C:/Users/<user>/AppData/Local/Temp/out.png" \
+    "file:///C:/Users/<user>/AppData/Local/Temp/in.svg"
   ```
   `--screenshot=` 的值和 `file:///` 后的路径都必须是**原生 `C:/...` 形式**(bash 的 `/c/...` 传给原生
   程序不翻译);输出文件名别和源文件同名(会自我覆盖);渲染完交给视觉工具读图,要给用户看就 `MEDIA:<绝对路径>`。
@@ -1007,6 +1049,11 @@ A non-exhaustive list of Windows-bash gotchas that come up:
 
 - **`pkill` doesn't exist on Windows.** Use `taskkill /F /IM <name>.exe`
   (with the full gatekeeper workaround via `cmd.exe //c "..."`).
+  **`taskkill //F //PID <n>` does NOT work from this bash** (MSYS path conversion is off, so `//F`
+  reaches it verbatim and it answers `无效参数/选项 - '//F'`). Kill by PID with
+  `powershell -NoProfile -Command "Stop-Process -Id <n> -Force"`, and resolve the real PID first — the
+  PID a background `terminal` call reports is the **bash wrapper**, while the actual listener is a
+  child (`netstat -ano | grep <port>` gives the right one).
 - **Chinese console output is GBK, not UTF-8.** Capturing a PowerShell /
   native-tool output in Python with `text=True` blows up with
   `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xd6`. Pass
@@ -1064,11 +1111,11 @@ A non-exhaustive list of Windows-bash gotchas that come up:
   Editing a file under `/tmp/` (e.g. a git clone at `$LOCALAPPDATA/Temp/...`)
   with the patch tool may return `resolved_path: \tmp\...` plus an "OUTSIDE
   the active workspace" warning — the write still lands in bash's real `/tmp`
-  (= `C:/Users/ianle/AppData/Local/Temp`, same mapping as `cd /tmp`). Don't
+  (= `C:/Users/<user>/AppData/Local/Temp`, same mapping as `cd /tmp`). Don't
   chase the displayed path (a drive-root `C:\tmp\...` there usually does NOT
   exist) and don't redo the edit; confirm the change with `git status` +
   grep inside the actual repo. To skip the scare entirely, pass the native
-  `C:/Users/ianle/AppData/Local/Temp/...` path to the tool in the first place.
+  `C:/Users/<user>/AppData/Local/Temp/...` path to the tool in the first place.
 - **patch tool refuses "Escape-drift detected" on CRLF files whose code contains backslash-n
   string escapes.** Editing a Windows-side script (CRLF endings) that prints things like
   backslash-n inside an f-string makes the patch tool compare backslash runs and bail with
@@ -1079,6 +1126,11 @@ A non-exhaustive list of Windows-bash gotchas that come up:
   back as `utf-8`; verify with `python -c "import ast; ast.parse(...)"`. Do that on the LOCAL copy,
   then `scp` it to the remote host instead of sed-editing in place over ssh. Also note
   `scp` with a native `C:/...` source path works while MSYS `/c/...` sources can fail.
+- **推送脚本里绝不用 `sed` 改多行 `git commit -q -m "..."`。** 多行 message 靠反斜杠续行,
+  `sed` 只替换第一行会留下孤立的续行 → bash 在**解析阶段**就报
+  `syntax error near unexpected token`,而**报错之前的命令已经执行过了** → 结果是
+  “commit 成了、push 没跑”的半成品,极易被误判成已同步。commit message 一律写单行;
+  推完必须比对本地与远程 HEAD 的 SHA(`git log --oneline -1` vs `-1 origin/main`)。
 - **`write_file` refuses to overwrite a file it has only seen redacted.** If a config was read with
   a secret masked (e.g. a bot token in a compose file), the tool answers "exists but this task has
   not seen its full current content" and writes nothing. Either re-read the file or use `patch` for
@@ -1147,9 +1199,9 @@ head -5 /c/Users/<user>/.hermes/skills/xiaohu-video-md/SKILL.md
 # → if "No such file or directory", the link is dangling or empty
 
 # 2. cmd dir /A:L — the only way to see reparse point type
-cmd //c "dir /A:L C:\\Users\\<user>\.hermes\skills"
-# → <SYMLINK>  xiaohu-video-md [...C:\\Users\\<user>\.claude\skills\xiaohu-video-md]
-# → <JUNCTION> xiaohu-video-md [...C:\\Users\\<user>\.claude\skills\xiaohu-video-md]
+cmd //c "dir /A:L C:\Users\<user>\.hermes\skills"
+# → <SYMLINK>  xiaohu-video-md [...C:\Users\<user>\.claude\skills\xiaohu-video-md]
+# → <JUNCTION> xiaohu-video-md [...C:\Users\<user>\.claude\skills\xiaohu-video-md]
 # → (no entry)  the path is a regular empty dir, NOT a reparse point
 
 # 3. stat links count
@@ -1172,7 +1224,7 @@ nested quotes. Observed on 50.110:
 ```bash
 # ❌ FAILS — cmd prompt shown, no command executed
 cmd //c "wsl -d Ubuntu-24.04 --status"        # blank cmd prompt appears
-cmd //c "dir /AL C:\\Users\\<user>\.hermes\skills"  # blank cmd prompt appears
+cmd //c "dir /AL C:\Users\<user>\.hermes\skills"  # blank cmd prompt appears
 cmd //c 'H:\dev\npm-global\ocx.cmd --version' # single-quoted full path — STILL swallowed (2026-08-04)
 ```
 
@@ -1184,9 +1236,9 @@ in ways that leave cmd.exe with no argument to run. The fix is to
 # ✅ WORKS — write to .bat first, then call cmd //c on the .bat path
 cat > /tmp/mklink_xiaohu.bat << 'BATCH_EOF'
 @echo off
-mklink /J "C:\\Users\\<user>\.hermes\skills\xiaohu-video-md" "C:\\Users\\<user>\.claude\skills\xiaohu-video-md"
-mklink /J "C:\\Users\\<user>\.hermes\skills\xiaohu-subtitle-polish" "C:\\Users\\<user>\.claude\skills\xiaohu-subtitle-polish"
-mklink /J "C:\\Users\\<user>\.hermes\skills\xiaohu-video-download" "C:\\Users\\<user>\.claude\skills\xiaohu-video-download"
+mklink /J "C:\Users\<user>\.hermes\skills\xiaohu-video-md" "C:\Users\<user>\.claude\skills\xiaohu-video-md"
+mklink /J "C:\Users\<user>\.hermes\skills\xiaohu-subtitle-polish" "C:\Users\<user>\.claude\skills\xiaohu-subtitle-polish"
+mklink /J "C:\Users\<user>\.hermes\skills\xiaohu-video-download" "C:\Users\<user>\.claude\skills\xiaohu-video-download"
 BATCH_EOF
 MSYS_NO_PATHCONV=1 cmd.exe //c "$(cygpath -w /tmp/mklink_xiaohu.bat)"
 ```
@@ -1204,15 +1256,15 @@ rmdir /c/Users/<user>/.hermes/skills/xiaohu-video-md
 # → rmdir: failed to remove 'xiaohu-video-md': Directory not empty
 
 # ✅ WORKS — cmd rmdir uses Windows semantics: remove reparse point only
-cmd //c "rmdir C:\\Users\\<user>\.hermes\skills\xiaohu-video-md"
+cmd //c "rmdir C:\Users\<user>\.hermes\skills\xiaohu-video-md"
 
 # ✅ ALSO WORKS — PowerShell
-powershell -Command "Remove-Item C:\\Users\\<user>\.hermes\skills\xiaohu-video-md"
+powershell -Command "Remove-Item C:\Users\<user>\.hermes\skills\xiaohu-video-md"
 ```
 
 **`rmdir` on a junction or symlink removes the link, not the
 target.** Files in the source directory are untouched. Verify
-after with `cmd //c "dir C:\\Users\\<user>\.hermes\skills"` and
+after with `cmd //c "dir C:\Users\<user>\.hermes\skills"` and
 confirm the link is gone but the source is still there.
 
 ### Pitfalls (all hit on 50.110, all recoverable)
@@ -1262,7 +1314,7 @@ to change.
 ### The single command that makes it work
 
 ```bash
-cmd.exe //c "mklink /J C:\\Users\\<user>\.hermes\skills H:\dev\skills"
+cmd.exe //c "mklink /J C:\Users\<user>\.hermes\skills H:\dev\skills"
 ```
 
 - `mklink /J` = junction (not symlink, not hard link)
@@ -1310,7 +1362,7 @@ pick them up; new shells (and new agent invocations) will.
   confuse the file handle. Stop the agent first if junctioning
   under an open file.
 - **❌ Forgetting to test after junctioning.** Always
-  `ls C:\\Users\\<user>\.hermes\skills` and confirm it shows the H:
+  `ls C:\Users\<user>\.hermes\skills` and confirm it shows the H:
   contents. Empty list = junction is dangling (H: not mounted,
   path typo, or wrong drive letter).
 - **❌ `rmdir` thinking it deletes the target.** `rmdir` on a

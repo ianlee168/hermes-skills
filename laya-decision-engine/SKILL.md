@@ -27,20 +27,14 @@ consumer GPU, 0 output tokens). Weights are open on the hub; three checkpoints i
 | `multilingual` | `multilingual` | mmBERT-base | 45+/51 languages |
 | `typed-decisions` | `typed-decisions` | (fine-tuned on typed-decisions) | real decision tasks |
 
-
-> Layout on this machine (substitute equivalents elsewhere): project scripts `<PROJECT_DIR>`,
-> dedicated venv `<VENV>`, HF weight cache `<HF_HOME>`, pip cache `<PIP_CACHE>` and the local
-> secret files `<SECRETS_DIR>` all live on a non-C: data drive, except the canonical key file
-> under the Hermes home. C: holds Hermes itself only.
-
 ## Install (dedicated venv, caches OFF C:)
 
 Requirements: Python >= 3.10, CUDA GPU for the advertised latency. Never install into the Hermes
 venv — it pins torch/transformers major versions that will collide with Hermes deps.
 
 ```bash
-PY="<PYTHON310_EXE>"   # standalone base, NOT the hermes venv
-VENV="<VENV>"; mkdir -p <VENV_PARENT>
+PY="C:/Users/<user>/AppData/Local/Programs/Python/Python310/python.exe"   # standalone base, NOT the hermes venv
+VENV="H:/dev/venvs/laya"; mkdir -p /h/dev/venvs
 "$PY" -m venv "$VENV"
 VPY="$VENV/Scripts/python.exe"
 "$VPY" -m pip install --upgrade pip setuptools wheel
@@ -52,9 +46,9 @@ VPY="$VENV/Scripts/python.exe"
 Wrap every run in a launcher that keeps downloads off C: (weights are ~2.4 GB in total):
 
 ```bat
-set "HF_HOME=<HF_HOME>"
-set "PIP_CACHE_DIR=<PIP_CACHE>"
-"<VENV>\Scripts\python.exe" %*
+set "HF_HOME=H:\dev\models\hf"
+set "PIP_CACHE_DIR=H:\dev\cache\pip"
+"H:\dev\venvs\laya\Scripts\python.exe" %*
 ```
 
 Model weights land under `%HF_HOME%\hub\models--convaiinnovations--laya\`. Pre-warm them with any
@@ -105,8 +99,8 @@ res["usage"]                                     # input_tokens, output_tokens=0
 - **`pip`'s download staging and cache land on C:** — the CUDA wheel alone parks ~2.9 GB in
   `%TEMP%` then ~2.9 GB in the pip cache. Set `PIP_CACHE_DIR` (and `HF_HOME`) to a non-C: drive
   before installing; cleaning the cache afterwards is a delete and needs the user's explicit consent.
-- **Native python needs Windows-form paths.** a native Windows path (`<DRIVE>:/dir/proj`) works; MSYS-style
-  MSYS-style `/<drive>/dir/...` only works for bash builtins, not for the interpreter's own arguments.
+- **Native python needs Windows-form paths.** `H:/dev/...` or `C:/Users/...` works; MSYS-style
+  `/h/dev/...` only works for bash builtins, not for the interpreter's own arguments.
 - **`RuntimeWarning: temperatures outside [0.5,5] ... clamping choice:11+=...` on load** means those
   temperature buckets ship unfitted → treat that bucket's `confidence` as uncalibrated. The
   `multilingual` checkpoint ships NO fitted temperatures at all; refit per (question type, option
@@ -255,8 +249,78 @@ middleware ecosystem (model routing, tool-risk gating) and cookbooks worth copyi
 `typesafe-ai/system-one-adapter-python`, which constrains any LLM to emit Jev-compatible structured
 decisions and is a ready-made teacher labeller for the fine-tuning pipeline above.
 
+## laya-guard: three-layer front-end guard, deployed and verified on 50.110
+
+A **Hermes plugin + local service** (not a standalone program) that screens agent input before the
+model sees it. Two hooks, both native Hermes plugin hooks - no core patching:
+
+| hook | fires on | action |
+|---|---|---|
+| `pre_gateway_dispatch` | inbound messages into the **gateway** (Telegram/WeChat/...) | annotate (rewrite with warning prefix) or skip |
+| `transform_tool_result` | results of untrusted tools (`web_extract`, `browser_exec`, `mcp_call`, ...) | append a warning block; never blocks the tool |
+
+Layers: ① local Laya `multilingual` gate -> ② narrow regex net (catches Chinese/mild wording the
+model scores ambiguously) -> ③ **cloud Jev review only when ①/② are unsure** (grey band or regex hit),
+and Jev can also *withdraw* a regex false positive. Service listens on `127.0.0.1:8799` only
+(`server.py`), fail-open on every error, `LAYA_GUARD_DISABLE=1` / `enabled: false` as kill switches,
+audit log stores `sha8` + scores, never the text.
+
+Measured on 50.110 (RTX 4070 SUPER / Win11), all green:
+
+| check | result |
+|---|---|
+| `tests/test_hooks.py` | 34 pass / 0 fail / 0 skip |
+| `calibrate.py` | false positives 0 / misses 0 |
+| `tests/jev_live_check.py` | "all as expected" (Jev round trip 695-753 ms) |
+| real end-to-end | a CLI agent fetched an injection page -> `agent.log: annotated web_extract result (prompt_injection=1.00, 343ms)` |
+| fail-open, real fault | service killed -> same query still completed (only +1.2 s = the 1.5 s client timeout), no annotation, no error |
+| cold start | 7.4 s load (cuda, bfloat16), 13-52 ms/screen afterwards |
+
+The design's real value is layer ②+③, not the local model alone: Chinese "pseudo-authorised, skip the
+confirmation" scored **0.092** locally (would pass) -> regex caught it -> Jev **0.86 strong** -> annotated;
+the reverse also worked (benign Chinese that scored 0.935 locally -> Jev 0.26 -> annotation withdrawn).
+
+### Deploying it on Windows (the parts the Linux package doesn't cover)
+
+- **Service**: start via a `.vbs` launched by `wscript //B //Nologo` (windowless), registered as a
+  **logon-trigger Scheduled Task** — that is this machine's existing convention (`Hermes_Gateway`).
+  `New-ScheduledTaskSettingsSet` defaults to a **3-day `ExecutionTimeLimit`, which silently kills a
+  resident service** — pass `-ExecutionTimeLimit ([TimeSpan]::Zero)`; mirror `RestartCount 999 /
+  PT1M` for crash restart. Reference implementation: `H:\dev\laya\laya-guard.vbs` +
+  `run-laya-guard.cmd`.
+- **Env paths must be Windows-form** — see `hermes-windows-bash-quirks` "pitfall 8": exporting
+  `HERMES_HOME=$HOME/...` from MSYS hands the native process an invalid `/c/...` path, which makes the
+  service silently drop the Jev layer (no key) and write its log into a `C:\c\...` junk tree. Verify
+  with `/health` -> `jev.configured == true`.
+- **`rss_mb` is -1 on Windows** (reads `/proc/self/status`); ignore that field.
+- **`sync-jev-key.sh` needs bun + the brain directory** — it does not run on Windows; place the key at
+  `%LOCALAPPDATA%\hermes\secrets\typesafe-jev.key` (108 bytes, no trailing newline) by hand.
+- **Enabling the plugin needs the app/gateway restarted**; confirm it took by grepping the log for
+  `hermes_plugins.laya_guard: laya-guard registered`. Enabling = add the name to `plugins.enabled`
+  (use `hermes config set`, keep the existing entries).
+- `pre_gateway_dispatch` covers **gateway** inbound only — interactive desktop/CLI input does not pass
+  through it, so on a desktop-only box the tool-result layer is the one that actually earns its keep.
+
+### Two corrections to the published package/handoff (both measured, not guessed)
+
+- **A trailing newline does NOT cause HTTP 401.** `$(cat file)`, python `urllib.request` (which strips
+  per RFC) both return 200 with a trailing newline present; only a raw embedded newline in the header
+  gives **422** (curl refuses to send, exit 23); a **truncated/masked key gives 401**. Normalising to
+  108 bytes is still worth doing (one unambiguous checksum across machines) - just don't record 401 as
+  its cause, or the next 401 hunt will chase newlines.
+- **Published sha256 checklists fail on Windows checkouts.** With `core.autocrlf=true` and no
+  `.gitattributes`, all 14 files "mismatch" while the git blob content is byte-identical. Compare
+  `git cat-file -p HEAD:<path> | sha256sum`, or ship `.gitattributes` with `* text=auto eol=lf`.
+
+### Privacy knob to decide per machine
+
+`jev.grey_band = [0.90, 0.99]` sends roughly **12% of ordinary content off-box** to `api.typesafe.ai`
+(measured on their corpus). On a private desktop that reads mail/browser/private docs, consider
+`[0.95, 0.99]` or keeping only `escalate_on_pattern: true`. Cost is negligible (~$23 per million
+screens) - the decision is about content leaving the machine, not money.
+
 ## Reference
 
 - Repo README carries an "Honest limits" section — read it before promising accuracy.
-- Project layout convention used here: venv `<VENV>`, HF cache `<HF_HOME>`,
-  launcher + demo scripts `<PROJECT_DIR>\`.
+- Project layout convention used here: venv `H:\dev\venvs\laya`, HF cache `H:\dev\models\hf`,
+  launcher + demo scripts `H:\dev\laya\`.
