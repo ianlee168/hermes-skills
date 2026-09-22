@@ -144,6 +144,52 @@ res["usage"]                                     # input_tokens, output_tokens=0
 - First inference after load pays a one-off CUDA/warmup cost (seen ~345 ms); always warm up before
   quoting latency numbers.
 
+## Fine-tuning on your own traffic (RLCD, single card is enough)
+
+The official Kaggle notebook (`notebooks/laya_finetune_typed_decisions_2xT4_kaggle.ipynb`) is the only
+public recipe; it is a self-contained ~220-line training script, not a config flag. Its shape:
+
+1. **Data**: rows of `state` / `questions` / `gold`, each a JSON *string* (dataset
+   `LocalLLaMA/typed-decisions`: `id, workflow, split, state, questions, gold, factors,
+   label_agreement, n_questions`). `gold` is a **teacher probability distribution** per question
+   (`{"action": {"probabilities": {"continue": 0.283, "human_review": 0.433, ...}, ...}}`), not a hard
+   label. Hard labels alone cap quality - get a distribution (sample a strong teacher k times and use
+   the frequencies; direct LLM self-reported probabilities are poorly calibrated).
+2. **Preprocess**: `laya.common.build_sequence(tokenizer, state, {t, ins, crit}, max_len, head_max_len)`
+   produces `[CLS] <type> instructions [SEP] [MASK] opt0 [MASK] opt1 ... [SEP] state [SEP]` plus the
+   option `markers`; pad to a batch with `pad_token_id`.
+3. **Train**: `laya.common.build_model(cfg, encoder_dir=...)` + `proper_reward(q, target, qtype, mask,
+   w_sph=0.75, w_rps=1.0)`; GRPO-style policy gradient - sample G=4 noisy logit sets with sigma 0.4→0.1
+   (zero-mean projected, masked), group-normalised advantage, plus a 1.0-weighted soft cross-entropy;
+   encoder lr 2.5e-5 / head lr 1e-4, AdamW wd 0.01, cosine, fp16 AMP + GradScaler, gradient
+   checkpointing, grad clip 1.0, 4 epochs.
+4. **Calibrate**: after training, fit one temperature per question type with LBFGS on
+   `-(T * log_softmax(Z/T))` and write it into `rl_agent_config.json`. That is where usable
+   confidence comes from - do it per (question type, option count), and clamp to a sane range: the
+   shipped English config has `choice:11+` = 0.1006, which is exactly the bucket the loader warns
+   about.
+5. **Artifacts**: `model.safetensors` (fp16) + `encoder/` + `tokenizer/` + `rl_agent_config.json`
+   (`fine_tuned: true`, `temperature: [...]`). `laya.Agent("<local output dir>")` loads it directly.
+
+**VRAM/time measured on one 12 GB RTX 4070 SUPER** (`ft_feasibility.py`, real training step, gradient
+checkpointing, seq filled to ~max_len):
+
+| max_len / head_max_len | micro batch | s per micro-batch | peak alloc | 60k decisions, 4 epochs |
+|---|---|---|---|---|
+| 1024 / 256 | 8 | 0.82 | 5564 MiB (6120 reserved) | ~6.8 h |
+| 512 / 192 | 8 | 0.35 | 4661 MiB (5332 reserved) | ~2.9 h |
+| 1024 / 256 | 16 | 1.61 | 7134 MiB (7706 reserved) | ~6.7 h (no speedup, nearly OOM) |
+
+So a single 12 GB card trains the 421 M-parameter model with micro batch 8; Kaggle is optional. The
+throughput matches the vendor's own 2xT4 run (`training` block in their shipped config: 7313 updates,
+1 epoch, 1.96 h) - extrapolating 60k decisions gives ~1.7 h/epoch locally.
+
+Pitfalls: warm up before quoting numbers; **toy-length batches lie** (69-token sequences peaked at
+4 GB and looked 3x faster than realistic ~930-token ones, so always fill sequences to max_len when
+measuring memory/time); the teacher's own self-agreement is the ceiling (the public set's
+`label_agreement` shows teacher argmax disagreement on whole rows); a guardrail on Chinese needs
+Chinese-labelled data. First milestone: run the public dataset end-to-end before touching your own.
+
 ## Reference
 
 - Repo README carries an "Honest limits" section — read it before promising accuracy.
