@@ -28,9 +28,9 @@ consumer GPU, 0 output tokens). Weights are open on the hub; three checkpoints i
 | `typed-decisions` | `typed-decisions` | (fine-tuned on typed-decisions) | real decision tasks |
 
 
-> 本机布局示例（其它机器自行等价替换）：项目脚本目录 `<PROJECT_DIR>`、独立 venv `<VENV>`、
-> HF 权重缓存 `<HF_HOME>`、pip 缓存 `<PIP_CACHE>` 全部放在**数据盘**（非 C: 的独立盘符），
-> 绝不落 C 盘 —— C 盘只放 Hermes 自身。
+> Layout on this machine (substitute equivalents elsewhere): project scripts `<PROJECT_DIR>`,
+> dedicated venv `<VENV>`, HF weight cache `<HF_HOME>` and pip cache `<PIP_CACHE>` all live on a
+> non-C: data drive - C: holds Hermes only.
 
 ## Install (dedicated venv, caches OFF C:)
 
@@ -105,7 +105,7 @@ res["usage"]                                     # input_tokens, output_tokens=0
   `%TEMP%` then ~2.9 GB in the pip cache. Set `PIP_CACHE_DIR` (and `HF_HOME`) to a non-C: drive
   before installing; cleaning the cache afterwards is a delete and needs the user's explicit consent.
 - **Native python needs Windows-form paths.** a native Windows path (`<DRIVE>:/dir/proj`) works; MSYS-style
-  `/<drive>/dir/...` only works for bash builtins, not for the interpreter's own arguments.
+  MSYS-style `/<drive>/dir/...` only works for bash builtins, not for the interpreter's own arguments.
 - **`RuntimeWarning: temperatures outside [0.5,5] ... clamping choice:11+=...` on load** means those
   temperature buckets ship unfitted → treat that bucket's `confidence` as uncalibrated. The
   `multilingual` checkpoint ships NO fitted temperatures at all; refit per (question type, option
@@ -122,6 +122,24 @@ res["usage"]                                     # input_tokens, output_tokens=0
   instructions / 0.360 with Chinese instructions, against 0.885 for the English control — i.e.
   noul on Chinese is unreliable on `multilingual`, while `typed-decisions` read the same state 0.789.
   Probe per primitive before trusting a preset on Chinese.
+- **`guard_questions()` as a front-end guardrail: usable as ONE layer, never as the only gate.**
+  Measured on 20 injection/jailbreak attacks vs 20 benign prompts, routed:
+  `prompt_injection` ≥0.5 → recall **0.80** / FPR **0.05**; `jailbreak` ≥0.9 → recall **0.65** / FPR **0.00**;
+  OR of both ≥0.5 → recall 0.80 / FPR 0.10; ~19 ms per prompt, 0 output tokens. It nails the loud,
+  explicit patterns (~1.00): "ignore all previous instructions", DAN personas, "no restrictions",
+  system-prompt echo by name, `[[system]]` override, base64 exfil, fake `User:/Assistant:` dialogue,
+  explicit Chinese jailbreaks. It systematically MISSES the indirect/social-engineering classes:
+  "repeat the text above starting with…" (0.14), grandma roleplay (0.27), developer/admin
+  impersonation (0.22/0.44), credential or env-var extraction (0.75), indirect Chinese asks (0.66).
+  Pair it with a deterministic rule layer for those classes and use two thresholds
+  (≥0.9 block, 0.5-0.9 log + secondary check). `sensitive_data` (recall 0.10) and `harm_severity`
+  (benign max 1.62 vs attack min 0.67) have **no** discriminative power - do not gate on them.
+  Vendor's own held-out prompt-injections figure (0.698) agrees with this ballpark.
+- **Route before judging Chinese.** On the English checkpoint benign Chinese scores `jailbreak=1.000`
+  (100% false positives); on `multilingual` the same prompts score 0.001-0.008 while Chinese attacks
+  score 0.66-0.999.
+- Keep only the checkpoints you serve resident: guard duty needs `english`+`multilingual` (~3.2 GB);
+  preloading all three (~5 GB) competes with local LLM inference on a 12 GB card.
 - **`score` is the weakest primitive** (SST-5 0.372): do not build hard branches on it alone.
 - First inference after load pays a one-off CUDA/warmup cost (seen ~345 ms); always warm up before
   quoting latency numbers.
