@@ -29,6 +29,7 @@
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
 | `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
 | `laya-guard/` | 50.161 webui-hermes bot（Windows 支持文件由 50.110 补） | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放。**Windows 补充**:`WINDOWS-NOTES.md`(50.110 落地实测 + 两个 Windows bug + 清单哈希的 CRLF 坑)、`laya-guard.windows.vbs`(wscript 无窗口启动)、`install-windows-task.ps1`(登录触发计划任务,注意 `ExecutionTimeLimit` 默认 3 天会掐死常驻服务) |
+| `wol/` | 50.110 Windows bot | 从 NAS 唤醒 50.110 的 magic packet 发送脚本（纯 stdlib，无依赖） |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -41,6 +42,31 @@
 写提交信息、回执、README 时用这两个名字，不要再互称「同事」。
 
 跨机 SSH：**用户名是 `ianlee168@`**（不是 `ianlee@` —— 写错会得到 Permission denied，看起来像"没授权"）。
+
+## 两机分工（陛下 2026-09-22 定，两边共守）
+
+| 判据 | 归谁 | 附带约束 |
+|---|---|---|
+| **要 GPU，或要碰本机资源**（Windows 桌面弹窗、Chrome 已登录态、`D:`/`H:` 素材与模型、微信 iLink、USB/摄像头、本机进程） | **110妹 / 西宫妹妹（50.110）** | 在线窗口仅约 **10:30–02:00**（凌晨到中午基本关机）；长任务必须能中断续跑，排期落在 15:00–01:00 |
+| **要 24/7、要在深夜/清晨定点触发、或守护类**（看门狗/巡检/对外服务） | **161姐 / 东宫姐姐（50.161）** | ⚠ 该机实测 **4 核 / 7.2G 内存 / 无 GPU**（只有 QXL 虚拟显卡）；Laya 常驻已占 1.5–2G，别再加常驻重活 |
+| 两者都不需要（纯网络 / 纯运维琐活） | 161姐（一直在线上，秒级响应） | 若数据在本机（素材、`H:`/`D:` 模型）→ 归 110妹，别跨机搬 GB 级文件 |
+| 跨机迁移 / 对账 | 谁在线谁做，发起端优先 | —— |
+
+实测依据（2026-09-22）：50.110 = RTX 4070 SUPER 12G + 48G 内存，近 4 天关机 02:00–04:15、开机 10:33–14:02；50.161 = 4 核 / 7.2G / 无独显，已连续在线 2 周，跑 8 条系统级巡检。
+
+### 深夜 GPU 任务：从 NAS 唤醒 110妹（Wake-on-LAN）
+
+50.110 网卡侧已就绪：`wake_armed` 含 `Realtek PCIe 2.5GbE Family Controller`、驱动项「魔术封包唤醒 / 样式比对唤醒 / 关机网络唤醒」三项开启、`AutoAdminLogon=1`（唤起后自动登录，Hermes 网关与 laya-guard 自启，agent 立即可用）。**唯一未知是 BIOS 的 "Power On by PCIe"** —— 只能实测。
+
+161姐侧一条命令（`wol/send-wol.py`，纯 stdlib）：
+
+```bash
+python3 send-wol.py      # 默认打 BC:FC:E7:8C:3D:01，广播 192.168.50.255，端口 9/7 各发 3 次
+```
+
+**记下它打印的时间戳** —— 110妹 侧报告的 `LastBootUpTime` 与它对齐才能证明唤醒真的生效。
+
+110妹 侧：一次性验证脚本把证据（开机时间、`powercfg /lastwake`、开关机事件、网卡 armed 状态）写进 `D:\hermes-test\wol-verify\wol-test-result.txt` 后**自删触发项** —— 无窗口、无弹窗、不常驻、不循环。验证通过后，这套东西才允许用于「她在深夜叫醒 110妹 跑 GPU 活」；不通过就退回老规矩（GPU 活只排 15:00–01:00）。
 
 ## 改 skill 前的 3 步
 

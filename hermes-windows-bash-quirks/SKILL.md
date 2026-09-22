@@ -1559,6 +1559,23 @@ session transcript and a copy-paste trace template.
   再跑一次真实调用,**期望它照常完成**(只多等客户端超时那几秒)且不报错,然后确认任务把它自动拉回
   —— 用户要求"新自动化必须真造故障测功能"。
 
+## 非管理员会话跑一次性任务 + Wake-on-LAN 实测(2026-09-22,50.110 全踩一遍)
+
+- **`Register-ScheduledTask` 在非提权会话直接 `Access is denied`**(0x80070005)。一次性开机/登录任务别硬碰它:
+  把 `.vbs` 放进 `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`,登录时就会跑(**不需要管理员**),
+  脚本末尾自己 `Remove-Item` 掉这个启动项 —— 一次性、不常驻、不弹窗。机器若是 `AutoAdminLogon=1`,
+  登录触发与开机触发等价。
+- **验证启动项别用 `cmd //c start //b ...`**:MSYS 会把 `//c` 吃掉,结果开出一个交互 cmd 窗口、脚本根本没跑(本次白测一次)。
+  正确姿势:`powershell -NoProfile -Command "& wscript.exe '<vbs 的 Windows 路径>'"`。
+- **`.ps1` 里只用 ASCII**:PS 5.1 按 ANSI 读脚本,中文直接解析炸。要匹配中文设备名(如网卡 `以太网`)用
+  `Get-NetAdapter | Where-Object InterfaceDescription -match 'Realtek'` 取名字,别把中文写进参数。
+- **判断"网卡能不能唤醒系统"看两处,别信 `Get-NetAdapterPowerManagement`**:该 cmdlet 会抛
+  `A device attached to the system is not functioning`(error 31)。权威依据是
+  ① `powercfg /devicequery wake_armed` 里有没有那块网卡 ② 网卡高级属性(中文系统显示"魔术封包唤醒 / 样式比对唤醒 / 关机网络唤醒")。
+- **`powercfg /lastwake` 冷启动后恒为"唤醒历史记录计数 0"**:从 S5 唤醒只能靠 **开机时间与发包时刻对齐**来证明,
+  所以验证脚本必须记录 `LastBootUpTime`,发送端必须打印发包时间戳。
+- 拆报告别用 `head -30` 骗自己:`wake_armed` 有 10 行设备名,截断后看起来像"网卡没 armed"(本次差点误判成 WOL 不可行)。
+
 ## See Also
 
 - `agent-with-personal-brain` §6 — full secret-handling protocol
