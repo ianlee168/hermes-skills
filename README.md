@@ -31,6 +31,17 @@
 | `laya-guard/` | 50.161 webui-hermes bot（Windows 支持文件由 50.110 补） | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放。**Windows 补充**:`WINDOWS-NOTES.md`(50.110 落地实测 + 两个 Windows bug + 清单哈希的 CRLF 坑)、`laya-guard.windows.vbs`(wscript 无窗口启动)、`install-windows-task.ps1`(登录触发计划任务,注意 `ExecutionTimeLimit` 默认 3 天会掐死常驻服务) |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
+## 称呼约定（用户 2026-09-22 定，两边共用）
+
+| 机器 | 是谁 | 怎么称呼 |
+|---|---|---|
+| `50.110`（Windows 台式 bot） | 110妹 | **110妹 / 西宫妹妹** |
+| `50.161`（NAS 上的 Hermes VM） | 116姐 | **116姐 / 东宫姐姐** |
+
+写提交信息、回执、README 时用这两个名字，不要再互称「同事」。
+
+跨机 SSH：**用户名是 `ianlee168@`**（不是 `ianlee@` —— 写错会得到 Permission denied，看起来像"没授权"）。
+
 ## 改 skill 前的 3 步
 
 ```bash
