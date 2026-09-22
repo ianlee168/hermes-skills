@@ -170,7 +170,7 @@ f4:25:61              iStoreOS           → 192.168.50.5
 
 ## Hermes VM(50.161)磁盘瘦身 & qcow2 快照链合并(2026-08-27 实测)
 
-**访问凭据先查 gbrain**(`environment/hermes-vm`):用户名 **`ianlee168`(不是 <user>e!)**、50.110 公钥认证已配好 → `ssh ianlee168@192.168.50.161` 直接进。hostname=hermes,Ubuntu LVM `/dev/mapper/ubuntu--vg-ubuntu--lv 243G`。**先查 gbrain 再试 SSH,别瞎猜用户名浪费时间**。
+**访问凭据先查 gbrain**(`environment/hermes-vm`):用户名 **`ianlee168`(不是 ianlee!)**、50.110 公钥认证已配好 → `ssh ianlee168@192.168.50.161` 直接进。hostname=hermes,Ubuntu LVM `/dev/mapper/ubuntu--vg-ubuntu--lv 243G`。**先查 gbrain 再试 SSH,别瞎猜用户名浪费时间**。
 
 VM 内部磁盘满排查(用户目录大头):
 ```bash
