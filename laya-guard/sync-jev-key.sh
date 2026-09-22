@@ -41,8 +41,10 @@ if ! (cd "$GBRAIN_DIR" && timeout 240 "$BUN" src/cli.ts get "$SLUG" >"$tmp" 2>"$
 fi
 
 grep -oE 'apikey_[0-9a-f]+_[0-9a-f]+' "$tmp" | head -1 > "$tmp.raw"
-# 规范字节形态：**不带尾部换行**（sha256 = 54d7fd29f7c5a121…，跨机对账时唯一形态；
-# 带换行的会变成 dd6de919…，而且直接拿去拼 HTTP 头会 401）
+# 规范字节形态：**不带尾部换行**（sha256 = 54d7fd29f7c5a121…，跨机对账时唯一形态）。
+# 注意不要写成"尾换行会 401" —— 实测：客户端会先报错（Python urllib 直接 ValueError），
+# curl 真把 \n 塞进头是 422；**401 的真因是截断/掩码副本**（实测把 key 砍一半 → 401）。
+# 之所以还要规范化，只为对账不歧义（带换行 sha256 会变成 dd6de919…）。
 printf '%s' "$(cat "$tmp.raw")" > "$tmp.out"
 rm -f "$tmp.raw"
 if [ -s "$tmp.out" ]; then

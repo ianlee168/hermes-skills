@@ -109,7 +109,7 @@ asyncio.run(main())
 ## Windows 侧 SSH 免密/密码技巧
 
 - 密码登录无 sshpass 时:写 `askpass.sh`(`#!/bin/sh\necho '密码'`),然后
-  `SSH_ASKPASS=/c/Users/<user>/askpass.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0 ssh -p PORT root@HOST 'cmd'`
+  `SSH_ASKPASS=/c/Users/ianle/askpass.sh SSH_ASKPASS_REQUIRE=force DISPLAY=:0 ssh -p PORT root@HOST 'cmd'`
 - 公钥免密:本机 `~/.ssh/id_ed25519` 公钥追加到路由器 `/etc/dropbear/authorized_keys`
   (dropbear 无 AuthorizedKeysFile 配置时默认回退 `$HOME/.ssh/authorized_keys`;
   OpenWrt LuCI 管理权页面写入的就是这个文件;别在 `/root/.ssh/` 里找,host key 在 /etc/dropbear/)
@@ -127,7 +127,7 @@ asyncio.run(main())
 - 排查:改 sshd_config `LogLevel VERBOSE` + 重启,事件查看器 OpenSSH/Operational 给确切原因
   ("Failed publickey ... " / "no hostkeys")
 - 防火墙只放行局域网:`New-NetFirewallRule -RemoteAddress 192.168.50.0/24`
-- 50.161(161姐/东宫姐姐)访问 50.110 的钥匙:<USER_EMAIL> 那把公钥已写入(2026-08-12)
+- 50.161 臣妹访问 50.110 的钥匙:ianle168@gmail.com 那把公钥已写入(2026-08-12)
 
 ## Open-Box 透明代理安装坑(2026-09-08 实测)
 

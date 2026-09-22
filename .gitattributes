@@ -1,0 +1,12 @@
+# 跨平台一致性（2026-09-22 加，由 110妹 的实测促成）
+#
+# 原因：Windows 默认 core.autocrlf=true，检出时会把 LF 转成 CRLF →
+# 同一个文件在 Windows / Linux 两侧 sha256 不同 → 跨机对账（laya-guard 的指纹清单）
+# 会 14/14 全部误报"不一致"，看起来像包被篡改。
+#
+# 只约束 laya-guard/（本目录的指纹清单要跨平台对账）；其他目录不动，
+# 避免影响已有 bot 的检出状态。
+laya-guard/** text eol=lf
+
+# 备选对账法（不想改检出配置时）：比对 git blob 内容，不受工作区换行转换影响
+#   git cat-file -p HEAD:laya-guard/server.py | sha256sum

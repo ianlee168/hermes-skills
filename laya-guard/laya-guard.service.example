@@ -21,6 +21,8 @@ ExecStartPre=-/bin/bash %h/.hermes/plugins/laya-guard/sync-jev-key.sh
 ExecStart=%h/laya-venv/bin/python %h/.hermes/plugins/laya-guard/server.py
 Restart=always
 RestartSec=5
+# exit 3 = 配置自检失败（HERMES_HOME 不存在）：别反复重启，让人看见
+RestartPreventExitStatus=3
 TimeoutStopSec=20
 # 模型常驻约 1.5–2.0 GB，加载峰值更高。内存紧的机器把这两行调小，
 # 调到低于稳态占用会被反复 OOM 重启；本身就小的机器建议别装模型层。

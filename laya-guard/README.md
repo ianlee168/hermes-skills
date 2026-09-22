@@ -19,6 +19,8 @@
 | `corpus.py` / `calibrate.py` | 阈值标定语料 + 标定脚本（改阈值前先跑这个；按语言拆开报告） |
 | `patterns.py` | **第二网**：窄正则，专兜中文/温和措辞（模型分数在这些样本上与正常消息重叠） |
 | `sync-jev-key.sh` | 从脑里把 TypeSafe Jev key 同步到 `$HERMES_HOME/secrets/typesafe-jev.key`（600，不进 agent 上下文）。systemd `ExecStartPre` 会跑它 |
+| `make-checksums.sh` | 生成跨机对账清单（文件名 + LF 规范内容的 sha256），供别的机器无 SSH 核对副本 |
+| `WINDOWS-NOTES.md` | **110妹（50.110）写的 Windows 落地回执**：CRLF 对账坑、两个 Windows bug 的实测、计划任务细节 |
 | `tests/test_hooks.py` | 钩子级回归（34 项：真实回调 + fail-open + kill switch + 正则第二网 + 云端复核层文案） |
 | `tests/jev_live_check.py` | **实弹**检查云端复核层（真打 TypeSafe，6 个用例） |
 | `laya-guard.sh` | 命令行手动过一遍护栏 |
@@ -156,6 +158,21 @@ curl -s localhost:8799/health | python3 -c "import json,sys;print(json.load(sys.
   要更细的区分度得自己重拟合温度（见 `../references/measured-results.md`）。
 - CPU 上每次约 220-400 ms（4 核 VM，无 GPU）。`pre_gateway_dispatch` 是**同步**钩子（Hermes 设计如此），
   所以这条延迟会占在 gateway 入站路径上 —— 单用户场景可接受，量大会明显。
+
+## 跨平台 / 跨机对账（110妹 实测促成，2026-09-22）
+
+- **指纹一律按 LF 规范内容算**。Windows 默认 `core.autocrlf=true`，检出会把 LF 变 CRLF →
+  同一文件两侧 sha256 不同，**14/14 全部误报"不一致"**（看着像被篡改）。仓库已加 `.gitattributes`
+  （`laya-guard/** text eol=lf`）；不改检出配置时用 blob 比对：
+  `git cat-file -p HEAD:laya-guard/server.py | sha256sum`。清单用 `make-checksums.sh` 生成。
+- **尾换行 ≠ 401（更正）**。实测：带尾换行的 key 用 Python `urllib` 发会直接 `ValueError`（客户端拒发），
+  curl 真把 `\n` 塞进头是 **422**；**401 的真因是截断/掩码副本**（把 key 砍一半 → 401）。
+  规范化成 108 字节只为对账不歧义，别把 401 的因果挂到换行上（否则下次真遇 401 会去删换行、以为修好了）。
+- **Windows**：`rss_mb` 无 `/proc` → 装了 `psutil` 就正常，否则 `/health` 里显示 `-1`（属已知，不是故障）。
+- **启动自检**：`HERMES_HOME` 指向不存在的目录 → 服务**大声报错并退出**（exit 3），不再静默降级
+  （静默降级的样子是：key 读不到 → 复核层悄悄关掉、日志写进 `/c/Users/...` 野目录）。systemd 单元里
+  配 `RestartPreventExitStatus=3` 可避免反复重启。
+- Windows 侧的完整落地细节看 `WINDOWS-NOTES.md`（110妹 写）。
 
 ## 故障模式
 

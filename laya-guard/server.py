@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -408,6 +409,15 @@ class Guard:
 
 
 def rss_mb() -> int:
+    """当前进程 RSS（MB）。跨平台：psutil（有就用）→ /proc → -1。
+
+    Windows 没有 /proc，没装 psutil 时返回 -1（已知，/health 里 rss_mb=-1 不代表异常）。
+    """
+    try:
+        import psutil  # 可选依赖，装了更好
+        return int(psutil.Process().memory_info().rss) // (1024 * 1024)
+    except Exception:
+        pass
     try:
         with open("/proc/self/status") as fh:
             for line in fh:
@@ -416,6 +426,27 @@ def rss_mb() -> int:
     except Exception:
         pass
     return -1
+
+
+def _check_home() -> None:
+    """启动自检：HERMES_HOME 必须真实存在，否则**响亮地失败**而不是静默降级。
+
+    为什么值得为此退出：路径写错（最典型是 Windows/MSYS 下把 POSIX 形态 "/c/Users/..." 传给
+    Python，而 Python 要 "C:\\Users\\..."）时，症状是——Jev key 读不到（复核层静默关闭，只留一行
+    warning）、日志被写到 "/c/Users/.../logs/" 这种野目录。这种"看着在跑、其实少一层"最难查。
+    服务不跑时插件本来就 fail-open，所以直接失败比默默降级更安全（systemd 单元里可用
+    RestartPreventExitStatus=3 避免反复重启）。
+    """
+    raw = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    if HERMES_HOME.is_dir():
+        return
+    msg = "HERMES_HOME 不存在: %s（来源: %s）" % (
+        HERMES_HOME, "环境变量 HERMES_HOME" if os.environ.get("HERMES_HOME") else "默认值 ~/.hermes")
+    if os.name == "nt" or re.match(r"^/[a-zA-Z]/", raw):
+        msg += " —— 看着像 POSIX 风格路径；Windows 上要 C:\\\\... 形态（MSYS 里用 cygpath -w 转）"
+    print("FATAL: " + msg + " —— 直接退出，避免 key 读不到/日志写进野目录这类静默降级", file=sys.stderr, flush=True)
+    logger.critical(msg)
+    sys.exit(3)
 
 
 def _audit(entry: dict) -> None:
@@ -489,6 +520,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> int:
+    # 自检必须在 _setup_logging() **之前**：后者会 mkdir 出 LOG_PATH 的父目录，
+    # 反而把"不存在的 HERMES_HOME"创建出来，让自检失真（实测踩过）。
+    _check_home()
     _setup_logging()
     if os.environ.get("LAYA_GUARD_DISABLE", "").lower() in ("1", "true", "yes", "on"):
         logger.info("disabled via LAYA_GUARD_DISABLE; exiting")

@@ -29,7 +29,7 @@ metadata:
 | 位置 | 用途 |
 |---|---|
 | gbrain `credentials/home-assistant` | 权威副本(长期访问令牌) |
-| `C:/Users/<user>/AppData/Local/hermes/.env` → `HASS_URL` + `HASS_TOKEN` | Hermes 插件用 |
+| `C:/Users/ianle/AppData/Local/hermes/.env` → `HASS_URL` + `HASS_TOKEN` | Hermes 插件用 |
 
 取了就用 env 变量 / `Authorization: Bearer`,**别 echo、别贴回聊天**(参考铁律)。
 拿不到时:让用户在 HA 左下角头像 → 安全 → 长期访问令牌创建,拿到后立刻存 gbrain。
