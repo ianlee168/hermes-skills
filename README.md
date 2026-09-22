@@ -27,6 +27,7 @@
 | `hermes-cron-troubleshooting/` | 50.110 Windows bot | Hermes cron 没跑/投递失败诊断；**一次性 job 漏跑超 120s 会被删除**、工作与告警不能同一失效点 |
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
+| `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 改 skill 前的 3 步
@@ -78,6 +79,7 @@ git push origin main
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `ha-desktop-alerts/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-bsod-watchdog/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `laya-decision-engine/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `home-assistant-api/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-windows-bash-quirks/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
