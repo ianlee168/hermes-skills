@@ -28,7 +28,7 @@ alone.** The email says what tripped; only the API says where the usage went.
 1. **Pull credentials out of gbrain, never out of the chat.**
    `gbrain get credentials/api-keys` has a `### Cloudflare` section: Workers
 token, Global API Key, D1 Access Token. The account is
-`Ianlee168@gmail.com's Account`.
+`<USER_EMAIL>'s Account`.
 2. **Keep tokens out of command text and out of the reply.** Extract inside the
    shell (`TOK=$(gbrain get credentials/api-keys | grep -o 'cfut_[A-Za-z0-9]*' | head -1)`)
    and pass `$TOK`. Never print a token, never paste one back to the user.
