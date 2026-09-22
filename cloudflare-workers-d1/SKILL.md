@@ -28,7 +28,7 @@ alone.** The email says what tripped; only the API says where the usage went.
 1. **Pull credentials out of gbrain, never out of the chat.**
    `gbrain get credentials/api-keys` has a `### Cloudflare` section: Workers
 token, Global API Key, D1 Access Token. The account is
-`Ianlee168@gmail.com's Account`.
+`<USER_EMAIL>'s Account`.
 2. **Keep tokens out of command text and out of the reply.** Extract inside the
    shell (`TOK=$(gbrain get credentials/api-keys | grep -o 'cfut_[A-Za-z0-9]*' | head -1)`)
    and pass `$TOK`. Never print a token, never paste one back to the user.
@@ -89,6 +89,13 @@ time. Lead with fix 2 and show the numbers that make $5 unnecessary.
 
 ## Pitfalls
 
+- **The token API cannot tell you whether a token may WRITE — the statement can.**
+  `/user/tokens/verify` answers `"status": "active"` without exposing any scopes, and reading the
+  token detail can come back `403` / `9109 Unauthorized to access requested resource`, so neither
+  proves D1 Edit rights. The only honest proof is running the statement and reading its result:
+  keep "no rights" (auth/authorization code, e.g. `7403`) distinct from "quota locked" (`7500`) when
+  you report, and if you cannot test before the reset window, say the DDL right is *unverified*
+  rather than assuming it — a read-only token fails the scheduled remediation the next morning.
 - **Two `cfut_` tokens exist and they are not interchangeable.** The Workers
   token fails `/d1/database` with `{"code":10000,"message":"Authentication
   error"}`. gbrain's annotation claiming only a `ca_` token has D1 rights is
@@ -103,6 +110,15 @@ time. Lead with fix 2 and show the numbers that make $5 unnecessary.
 - **A once-daily cron cannot blow a daily quota.** If the crons are daily and
   the binding is to a small DB, the usage is coming from the per-request
   queries on the public route.
+- **Verify a fix with per-statement cost, not the daily total.** Re-query each hot statement and
+  compare `meta.rows_read` against its pre-fix value (an indexed dedupe lookup goes from table-size
+  to ~0; a `LIMIT n` list goes to ~n). The daily analytics total lags a day and mixes one-time work.
+- **The day the indexes land spikes — that is not a failure.** `CREATE INDEX` itself reads the table
+  (~2x table size per index; four indexes over a 26k-row table ≈ 528k rows), so the usage alert can
+  fire on the very day the fix worked. Judge the first full day after, or the per-statement numbers.
+- **Indexes never help `COUNT(*)` / `GROUP BY` / `SUM`.** Expect a small full-scan residual (a couple
+  of scans a day once the cache is warm) and convert those to cached or incremental counters before
+  the table outgrows the cache.
 - Don't run measurement queries (COUNT(*), SUM, GROUP BY) while the account is
   already over the limit — they cannot succeed and add nothing. `--probe` in the
   script is opt-in for that reason.
