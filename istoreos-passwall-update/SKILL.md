@@ -127,7 +127,7 @@ asyncio.run(main())
 - 排查:改 sshd_config `LogLevel VERBOSE` + 重启,事件查看器 OpenSSH/Operational 给确切原因
   ("Failed publickey ... " / "no hostkeys")
 - 防火墙只放行局域网:`New-NetFirewallRule -RemoteAddress 192.168.50.0/24`
-- 50.161 臣妹访问 50.110 的钥匙:<user>168@gmail.com 那把公钥已写入(2026-08-12)
+- 50.161(161姐/东宫姐姐)访问 50.110 的钥匙:<USER_EMAIL> 那把公钥已写入(2026-08-12)
 
 ## Open-Box 透明代理安装坑(2026-09-08 实测)
 
