@@ -785,7 +785,7 @@ converted, env-var *values* do not: `HERMES_HOME="$HOME/AppData/Local/hermes" py
 `$HOME` = `/c/Users/<user>`) hands the native interpreter the literal string
 `/c/Users/<user>/AppData/Local/hermes`, which on Windows is a **relative path** → any code doing
 `Path(os.environ["HERMES_HOME"])` reads a directory that does not exist, and `mkdir` paths under it
-create a junk tree at `C:\c\Users\<user>\...` (a real 122 MB `C:\c\` litter pile on 50.110 came from
+create a junk tree at `C:\c\Users\ianle\...` (a real 122 MB `C:\c\` litter pile on 50.110 came from
 this class of bug). The failure is **silent**: the program starts, finds nothing, and keeps going.
 
 ```bash
@@ -1337,7 +1337,7 @@ cmd.exe //c "mklink /J C:\Users\<user>\.hermes\skills H:\dev\skills"
 | bun global | ✅ Yes via env var | set `BUN_INSTALL=H:\dev\bun` |
 | npm global | ✅ Yes via env var | set `NPM_CONFIG_PREFIX=H:\dev\npm-global` |
 
-### The 4 env vars that redirect future installs to H:
+### The 5 env vars that redirect future installs to H:
 
 Set these as **User-level** env vars (not system-wide, not in
 this shell's export — they must persist for every new process):
@@ -1348,7 +1348,16 @@ PYTHONUSERBASE=H:\dev\python
 BUN_INSTALL=H:\dev\bun
 NPM_CONFIG_PREFIX=H:\dev\npm-global
 OLLAMA_MODELS=H:\ollama
+PIP_CACHE_DIR=H:\dev\cache\pip     # 50.110 已设（User 级，2026-09-22）
 ```
+
+**`PIP_CACHE_DIR` 是唯一一个"设了但安装时仍然堆在 C 盘"的坑**：只有**新起的进程**会读它，
+而写在启动器脚本(`laya.cmd`)里的 `set` 对**安装命令**无效 —— 实测装完 Laya 后
+`pip cache dir` 仍回 `c:\users\<user>\appdata\local\pip\cache`，`H:\dev\cache\pip` 甚至不存在，
+单那一个 `torch+cu128` 的 wheel 就 2.86 GB 落在 C 盘。规则：**设成 User 级环境变量**
+（或放在与安装同一条命令里 `export`），跑大下载之前先 `pip cache dir` 确认，
+别信启动器里的 `set`。迁移已有缓存用复制+校验（大文件 sha256 对齐）再删源，
+别直接 purge —— pip 缓存是全机唯一的活缓存（hermes 自己的 venv pip 也用同一个目录）。
 
 **Effective only in new shell sessions.** Existing shells won't
 pick them up; new shells (and new agent invocations) will.

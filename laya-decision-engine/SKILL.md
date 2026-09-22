@@ -96,9 +96,20 @@ res["usage"]                                     # input_tokens, output_tokens=0
 - **PyPI's Windows `torch` wheel is CPU-only** (~124 MB vs 2.86 GB for `+cu128`). And PyPI's newest
   version can outrank the pytorch-index build, so `pip install torch` silently gives you CPU torch.
   Always pin `torch==<ver>+cu128` together with `--extra-index-url https://download.pytorch.org/whl/cu128`.
+- **A launcher's `PIP_CACHE_DIR` does NOT cover installs — set it as a user-level env var, then verify.**
+  Measured after a full Laya install on 50.110: `pip cache dir` still answered
+  `c:\users\<user>\appdata\local\pip\cache`, `H:\dev\cache\pip` **did not even exist**, and the 2.86 GB
+  `torch==2.9.1+cu128` wheel sat in the C: cache (one cache entry, 2862053390 bytes, dated the install
+  minute). The `set PIP_CACHE_DIR=...` line lived in the *runner* wrapper, which the install command
+  never went through — so the wheel was fetched twice on disk (C: cache + venv). Before installing,
+  `export PIP_CACHE_DIR=<non-C:>/pip` **in the same command** (or set it persistently via
+  `[Environment]::SetEnvironmentVariable('PIP_CACHE_DIR','H:\dev\cache\pip','User')`), then confirm with
+  `pip cache dir` **before** the big download starts.
 - **`pip`'s download staging and cache land on C:** — the CUDA wheel alone parks ~2.9 GB in
   `%TEMP%` then ~2.9 GB in the pip cache. Set `PIP_CACHE_DIR` (and `HF_HOME`) to a non-C: drive
   before installing; cleaning the cache afterwards is a delete and needs the user's explicit consent.
+  Note the C: cache is usually pip's ONE live cache for the whole machine (the hermes venv's pip
+  reports the same dir), so it keeps growing — purging it costs a re-download of whatever it held.
 - **Native python needs Windows-form paths.** `H:/dev/...` or `C:/Users/...` works; MSYS-style
   `/h/dev/...` only works for bash builtins, not for the interpreter's own arguments.
 - **`RuntimeWarning: temperatures outside [0.5,5] ... clamping choice:11+=...` on load** means those
