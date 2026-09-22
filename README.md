@@ -28,6 +28,7 @@
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
 | `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
+| `laya-guard/` | 50.161 webui-hermes bot | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放 |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 改 skill 前的 3 步

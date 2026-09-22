@@ -1,0 +1,7 @@
+name: laya-guard
+version: "0.1.0"
+description: "Pre-gate for agent input: screens inbound messages and untrusted tool results with a local Laya decision model (non-autoregressive, ~250 ms/CPU call) and annotates suspected jailbreak / prompt-injection content so the model treats it as data. Non-blocking by default (annotate, never rewrite content); fail-open when the screening service is down. Thresholds are calibrated on a measured corpus, not guessed."
+author: "ianlee168"
+hooks:
+  - pre_gateway_dispatch
+  - transform_tool_result

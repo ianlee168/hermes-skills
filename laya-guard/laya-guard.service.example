@@ -1,0 +1,33 @@
+# laya-guard systemd 用户级单元示例（复制到 ~/.config/systemd/user/laya-guard.service 后改路径）
+#
+# 要改的只有三处：%h 展开对不对、LAYAPY 的实际路径、HERMES_HOME 的目标 profile。
+# Windows / 容器没有 systemd：用计划任务 / nssm / docker restart 策略 / s6 达到同样效果
+# （开机自启 + 崩了重拉），见 INSTALL.md 第 3 步。
+
+[Unit]
+Description=laya-guard — local decision-engine screening service for Hermes (jailbreak / prompt-injection pre-gate)
+Documentation=file://%h/.hermes/plugins/laya-guard/README.md
+After=network-online.target
+
+[Service]
+Type=simple
+# HERMES_HOME 指到实际在用的 profile（多 profile 机器别写错）
+Environment=HERMES_HOME=%h/.hermes
+Environment=OMP_NUM_THREADS=4
+WorkingDirectory=%h/.hermes/plugins/laya-guard
+# 起服务前同步云端 key（前缀 - = 失败也不阻塞启动；没有第三层就删掉这行）
+ExecStartPre=-/bin/bash %h/.hermes/plugins/laya-guard/sync-jev-key.sh
+# 装 Laya 的解释器（独立 venv；Windows 是 ...\laya-venv\Scripts\python.exe）
+ExecStart=%h/laya-venv/bin/python %h/.hermes/plugins/laya-guard/server.py
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+# 模型常驻约 1.5–2.0 GB，加载峰值更高。内存紧的机器把这两行调小，
+# 调到低于稳态占用会被反复 OOM 重启；本身就小的机器建议别装模型层。
+MemoryHigh=2560M
+MemoryMax=3584M
+CPUWeight=50
+Nice=10
+
+[Install]
+WantedBy=default.target
