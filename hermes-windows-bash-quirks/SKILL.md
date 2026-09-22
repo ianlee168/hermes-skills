@@ -785,7 +785,7 @@ converted, env-var *values* do not: `HERMES_HOME="$HOME/AppData/Local/hermes" py
 `$HOME` = `/c/Users/<user>`) hands the native interpreter the literal string
 `/c/Users/<user>/AppData/Local/hermes`, which on Windows is a **relative path** → any code doing
 `Path(os.environ["HERMES_HOME"])` reads a directory that does not exist, and `mkdir` paths under it
-create a junk tree at `C:\c\Users\ianle\...` (a real 122 MB `C:\c\` litter pile on 50.110 came from
+create a junk tree at `C:\c\Users\<user>\...` (a real 122 MB `C:\c\` litter pile on 50.110 came from
 this class of bug). The failure is **silent**: the program starts, finds nothing, and keeps going.
 
 ```bash
