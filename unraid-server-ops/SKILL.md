@@ -170,7 +170,7 @@ f4:25:61              iStoreOS           → 192.168.50.5
 
 ## Hermes VM(50.161)磁盘瘦身 & qcow2 快照链合并(2026-08-27 实测)
 
-**访问凭据先查 gbrain**(`environment/hermes-vm`):用户名 **`ianlee168`(不是 ianlee!)**、50.110 公钥认证已配好 → `ssh ianlee168@192.168.50.161` 直接进。hostname=hermes,Ubuntu LVM `/dev/mapper/ubuntu--vg-ubuntu--lv 243G`。**先查 gbrain 再试 SSH,别瞎猜用户名浪费时间**。
+**访问凭据先查 gbrain**(`environment/hermes-vm`):用户名 **`ianlee168`(不是 <user>e!)**、50.110 公钥认证已配好 → `ssh ianlee168@192.168.50.161` 直接进。hostname=hermes,Ubuntu LVM `/dev/mapper/ubuntu--vg-ubuntu--lv 243G`。**先查 gbrain 再试 SSH,别瞎猜用户名浪费时间**。
 
 VM 内部磁盘满排查(用户目录大头):
 ```bash
@@ -250,17 +250,17 @@ Measured from the server's domestic broadband (download fine, upstream throttled
 
 ## Local LAN backup — rclone SFTP pull to the Windows host (2026-08-06, THE working route for big data)
 
-The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\ianle\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
+The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
 
 ```bash
-rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/ianle/.ssh/id_rsa"
+rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/<user>/.ssh/id_rsa"
 rclone lsd unraid:/mnt/cache/                 # verify
 rclone copy unraid:/mnt/cache/appdata "F:/unraid-backup/appdata" --stats 15s -v
 rclone copy unraid:/mnt/cache/domains "F:/unraid-backup/domains" --stats 30s -v   # big one
 ```
 
 - **Speed ~64-71 MiB/s** (gigabit LAN incl. SSH overhead) → 287G ≈ 75 min. qBittorrent `ipc-socket` errors (`SSH_FX_FAILURE`) are normal — runtime socket, not a real file; ignore.
-- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/ianle/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
+- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/<user>/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
 - **Sparse-file caveat**: SFTP backend has no sparse handling — a vdisk tree that `du`s 357G but is logically 664G transfers as 664G. F: drive must fit LOGICAL size; ETA ≈ 2.5-3h, not 1.2h.
 - **Consistency**: copying a RUNNING VM's vdisk = hot copy (restore may need fsck). Clean backup = stop VM → re-run `rclone copy` (incremental, only the delta, minutes) → start VM. NEVER stop `openwrt` if it is the soft-router — the whole LAN dies.
 
