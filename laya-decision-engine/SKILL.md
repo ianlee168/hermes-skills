@@ -190,6 +190,32 @@ measuring memory/time); the teacher's own self-agreement is the ceiling (the pub
 `label_agreement` shows teacher argmax disagreement on whole rows); a guardrail on Chinese needs
 Chinese-labelled data. First milestone: run the public dataset end-to-end before touching your own.
 
+## Interop with TypeSafe Jev (same category, measured)
+
+Jev (`docs.typesafe.ai`, `pip install typesafe-sdk`, `client.system_one(state=..., questions=...)`)
+is the same product class: identical `choice`/`score`/`noul` primitives, identical question schema
+(`type` / `instructions` / `criteria`), same RLCD training, same "no text generation" contract. The
+request/response JSON is **1:1 portable** - the published Jev request bodies run unmodified on a
+local Laya check point (adapter pattern: `<PROJECT_DIR>\jev_compat.py`).
+
+But three measured gaps make a blind swap unsafe:
+
+1. **`confidence` is a different statistic.** Laya = normalised entropy `1 - H(p)/log k`; the TypeSafe
+   docs demo `(3*max(p) - 1)/2`. Same field name, different number (0.39 vs 0.67 on one measured
+   distribution). Re-calibrate every threshold; never carry one over.
+2. **Schema variants that Jev accepts crash Laya.** `criteria: {}` or `criteria: []` →
+   `RuntimeError: selected index k out of range`; a missing `criteria` key →
+   `AttributeError: 'NoneType' object has no attribute 'items'`. Validate questions before calling.
+3. **`criteria` on a `noul` is silently ignored** (Laya's noul options are always `[false, true]`), so
+   the Jev idiom of defining what true/false mean buys nothing and fails silently.
+
+Values track in direction but Laya is more conservative on the same inputs (urgency noul 0.76 vs
+0.999; category 0.78 vs 0.97; quality score 1.40 vs 1.9), consistent with Jev's better soft
+probability matching. Reverse direction: Jev has type-safety guarantees, an SDK + LangChain
+middleware ecosystem (model routing, tool-risk gating) and cookbooks worth copying - notably
+`typesafe-ai/system-one-adapter-python`, which constrains any LLM to emit Jev-compatible structured
+decisions and is a ready-made teacher labeller for the fine-tuning pipeline above.
+
 ## Reference
 
 - Repo README carries an "Honest limits" section — read it before promising accuracy.
