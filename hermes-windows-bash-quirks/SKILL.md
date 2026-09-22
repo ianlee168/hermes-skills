@@ -42,7 +42,9 @@ metadata:
                "test files on C: drive", "scratch file location",
                "where do test files go", "D:\\hermes-test",
                "HERMES_HOME not found", "env var not translated", "C:\\c junk tree",
-               "taskkill invalid argument //F", "Stop-Process by pid"]
+               "taskkill invalid argument //F", "Stop-Process by pid",
+               "ExecutionTimeLimit", "常驻服务莫名停了", "计划任务拉起服务",
+               "跨盘搬迁校验", "copy then delete source"]
     related_skills: [systematic-debugging, debugging-hermes-tui-commands,
                      gbrain-memory-architecture]
 ---
@@ -76,7 +78,7 @@ bash).**
 This skill catalogs the five block patterns seen in practice and the
 correct response for each.
 
-## 硬规矩:测试/临时文件不许落 C 盘(2026-09-22 用户明令)
+## 硬规矩:测试/临时文件不许落 C 盘(2026-09-22 陛下明令)
 
 **"你的测试文件今后永远不要用C盘!!!别的盘都可以"** —— C 盘只放 Hermes 自身
 (`C:\Users\<user>\AppData\Local\hermes`)与系统文件。
@@ -696,6 +698,27 @@ cmd.exe //c "rd /s /q C:\tmp\brain-24h.gz.BAK-20260604-002527"
   Phase 1 too — the user needs to know the full plan, not just the
   eventual `rm`.
 
+### 大件搬迁(跨盘"搬而不删"):复制 → 校验 → 写清单 → 再删源
+
+用户选的是"搬到别的盘"而不是"清掉"时,固定四步,任一步不过就中止并报告 ——
+**绝不要凭复制脚本的退出码 0 就直接删源**。成品脚本:`scripts/move-verify-delete.py`
+(默认只复制+校验,加 `--delete-source` 才删)。
+
+1. **复制**:Python `shutil.copy2` 逐文件 + `onerror` 收集;别用 `robocopy` ——
+   它 exit 9 表示"有文件读不了"却仍算部分成功,极易被当成成功。
+2. **校验**:文件数 + 总字节数必须相等;**对大文件(>50 MB 量级)算 sha256 逐字节对比**;
+   "尺寸不一致数"必须为 0。把清单(路径/尺寸/sha256)写成 JSON 留在 D 盘,当删源脚本的输入。
+3. **回读确认旧路径已没人读**:删源前新起一个进程验证(例 `pip cache dir`、venv、
+   启动器脚本里的 `set`)—— **进程级 export 只对新进程生效**,写在启动器里那条对安装命令无效。
+4. **删源**:脚本按清单复检(对不上就跳过并计入失败数),末尾打印"删除 N / 跳过 M";
+   再独立扫一遍旧路径确认消失,并对比磁盘可用空间前后变化。
+
+**坑:文件可以"能删但读不了"。** 实测某 `.whl` 的 ACL 是 deny-read / allow-delete:
+`head`、`cp`、`robocopy`(exit 9)、`icacls` 全 Permission denied,而**不是** Defender 命中 ——
+它进不了副本,删源时却被删掉(净损失一份死数据)。规则:`shutil.copytree` 撞到这种文件会**整体**抛
+`shutil.Error`(看起来像整个复制失败,其实只一个文件),改成逐文件 `copy2` + `onerror` 收集,
+并**把这个文件名单独报给用户**再决定删不删源,别默默跳过。
+
 ## MSYS Path Translation (the silent source of "command not found")
 
 MSYS bash on Windows translates Unix-style paths to Windows-style
@@ -994,7 +1017,7 @@ A non-exhaustive list of Windows-bash gotchas that come up:
 - **`which` finds Windows .exe when in PATH** but the bash `type`
   builtin and `where` (Windows) give different results. Use
   `command -v <name>` for the most reliable cross-shell check.
-- **LAN 主机简写会被当成另一个 IP(2026-09-13 实测)。** 用户和笔记里习惯写 `50.206` /
+- **LAN 主机简写会被当成另一个 IP(2026-09-13 实测)。** 陛下和笔记里习惯写 `50.206` /
   `50.161` / `50.1`(省掉 `192.168.50.` 前缀),但 `ping 50.206`、`curl 50.206:8123`
   里的 `50.206` 是**合法的 IPv4 写法 = 50.0.0.206** —— 命令会真去连那个公网地址,
   于是超时/无路由,看起来像"那台机器挂了"。判据:Windows ping 回显会把它规范化成
@@ -1520,6 +1543,21 @@ session transcript and a copy-paste trace template.
 顺手加三样:离开页面提醒未保存、服务端每次写盘打一行日志(以后能查是谁什么时候存的)、
 交付时明确说 **“现在就能用”+ 地址 + 一句怎么用**(只说“做好了”会换来“我啥时能拖”)。
 另:服务若跑在会话里,告诉用户怎么自己重新拉起(双击 .bat / 命令),否则会话一结束它就没了。
+
+### 让它常驻:计划任务拉起 + 无窗口(`Hermes_Gateway` 结构)
+
+结构照抄本机现成的 `Hermes_Gateway` / `Hermes-BSOD-Notify`:**登录触发** + 动作
+`wscript //B <name>.vbs` + `-RestartCount 999`,并**显式 `-ExecutionTimeLimit ([TimeSpan]::Zero)`**
+—— 默认 3 天到点会把常驻服务掐死,表现是"跑着跑着自己没了"。
+
+- 无窗口:`.vbs` 里 `CreateObject("WScript.Shell").Run "<cmd>", 0, False`;
+  不要拿 `.cmd` 直接当动作(会闪黑框)。
+- 服务脚本收到的路径必须是 Windows 形式(`C:/...`),见上文 pitfall 8。
+- **进程链是 `wscript → venv shim → 真解释器`,两个 Python 进程不是"残留实例"**;
+  判"起了几个实例"以 `netstat -ano | grep <port>` 的监听 PID 为准,别按进程名数。
+- **停任务 = 停服务**(服务由任务拉起),这正是测 fail-open 的手法:`Stop-ScheduledTask -TaskName <name>`,
+  再跑一次真实调用,**期望它照常完成**(只多等客户端超时那几秒)且不报错,然后确认任务把它自动拉回
+  —— 用户要求"新自动化必须真造故障测功能"。
 
 ## See Also
 

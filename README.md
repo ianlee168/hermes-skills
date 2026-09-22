@@ -31,7 +31,7 @@
 | `laya-guard/` | 50.161 webui-hermes bot（Windows 支持文件由 50.110 补） | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放。**Windows 补充**:`WINDOWS-NOTES.md`(50.110 落地实测 + 两个 Windows bug + 清单哈希的 CRLF 坑)、`laya-guard.windows.vbs`(wscript 无窗口启动)、`install-windows-task.ps1`(登录触发计划任务,注意 `ExecutionTimeLimit` 默认 3 天会掐死常驻服务) |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
-## 称呼约定（用户 2026-09-22 定，两边共用）
+## 称呼约定（陛下 2026-09-22 定，两边共用）
 
 | 机器 | 是谁 | 怎么称呼 |
 |---|---|---|
@@ -67,15 +67,15 @@ git push origin main
 1. **零硬编** — 不写具体 IP / OS / 绝对路径到 skill。`/home/ianlee168/` / `50.161` / `C:\Users\` / `192.168.50.1` 都是错的。
 2. **gbra* 用源码** — `cd ~/.hermes/skills/gbrain && bun src/cli.ts`，**不要**用 `bin/gbrain` 编译版。
 3. **不要 commit 字面 token** — `ghp_xxx` / `sk-xxx` / `R2 secret` 全部用 `<占位符>` 替换。`git diff` 时**自己**看一遍再 push。
-4. **不要写 "陛下" 称呼** — 写 "ianlee168" 或 "用户"。
-5. **先 dry run 再 push** — 改完跑一遍相关命令验证，再 commit。用户 4 卷 → 王牌规矩"跑通 2 遍再写进 skill"。
+4. **称呼** — 对陛下照写「陛下」，**不要为了脱敏把它改成「用户」**；机器人之间用 **110妹（50.110）/ 161姐（50.161）**，不要再互称「同事」。
+5. **先 dry run 再 push** — 改完跑一遍相关命令验证，再 commit。陛下 4 卷 → 王牌规矩"跑通 2 遍再写进 skill"。
 6. **通信通道约定（2026-09-06 定）** — Windows 台式机（50.110）侧推送一律走微信（weixin/iLink）；跑在 NAS 上的 Hermes VM（50.161）侧推送一律走 telegram。跨机迁移任务时发送通道随之切换（例：sp500 播报迁 50.161 后已改 telegram）。
 
 ## 谁管什么 — 解释
 
 | 改的事 | 谁改 | 谁审 |
 |------|------|------|
-| `gbrain-*` 系列 | 50.161 webui-hermes bot | 用户看 git log |
+| `gbrain-*` 系列 | 50.161 webui-hermes bot | 陛下看 git log |
 | `switch-*` | 50.110 Windows bot（如有） | 50.161 不审，直接推 |
 | `istoreos-passwall-update/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `istoreos-istore-package-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
