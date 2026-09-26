@@ -76,6 +76,30 @@ hermes cron list --all | grep -A6 <name>      # 核对 schedule/script/deliver/n
   又让作业每天跑来自愈。自检要选**不触发同类限制**的手段(如 `EXPLAIN QUERY PLAN` 对 D1 是 0 行读取)。
 - 首次生效要人看到: 让它**只在"这次真的改了东西"时说话**, 而不是每天报一次"正常"。
 
+## agent 型作业撞上 gateway 环境损坏 → 降级成 no_agent 脚本(止损)
+
+**判据**: 作业的真实工作根本不需要模型(纯 rclone/curl/命令行), 却报
+`last_error: RuntimeError: Failed to initialize OpenAI client: No module named 'pydantic_core._pydantic_core'`
+或类似的 gateway 环境损坏错误 → 这不是"数据出问题", 是**执行路径**出问题。
+
+**根因**: agent 型作业在 gateway 进程内构造模型客户端(`cron/scheduler.py::_construct_cron_agent`),
+所以继承 gateway 被污染的 `sys.path`; 而 `no_agent` 在 `run_agent` 之前就短路(`cron/scheduler.py:2187`),
+**结构性免疫**同一环境损坏。
+
+**做法**:
+1. 把作业 prompt 里那些"运行补丁"(命令级参数、排除项、已知挂死源、验证口径)搬进一个脚本 ——
+   **prompt 不是文档, 它就是作业本体, 转换时必须逐条落地**, 否则等于静默丢掉几个月踩出来的经验。
+2. 脚本放 `$HERMES_HOME/scripts/`(作业只认这个目录下的文件名, 绝对路径也会被拒)。
+   `.sh/.bash` → Git Bash; 其它后缀 → `sys.executable`, 所以优先写 `.py`(不赌 bash 在 PATH 上)。
+3. `hermes cron edit <id> --no-agent --script <name.py>`; prompt 字段留着当文档, 不用清。
+4. 顺带收益: 不再烧 token, 输出确定性更高。
+
+**验收必须走真 fire, 不能用 `hermes cron run` 代替**: 那个命令是 CLI 自己当 owner(`source=direct`),
+走不到出问题的那条路径。正确做法是把 schedule 临时改成 **4-5 分钟后的某一分钟**, 等 ticker 自己 fire,
+在 `hermes cron runs` 里确认 `source=builtin` + `status=completed`, 读 `cron/output/<job_id>/<ts>.md`,
+**然后立刻改回原表达式并复核 `next_run_at`**(改完不复核 = 埋一个每 5 分钟跑一次的雷)。
+
+
 ## 把新密钥送到远端主机(不回显)
 
 远端脚本要用某个 token 时, 不要手打、不要贴进对话:
@@ -118,6 +142,18 @@ python3 -c "<本机凭证源提取 token>" | ssh <host> \
   争 I/O 可超 44 分钟不返回 → 改用 `rclone size` 或直接用 rclone 自带的 Transferred/Checks/Errors 统计核账。
 
 另: 前台命令超时(报 timeout)后子进程**不一定会死**, 会变孤儿继续跑并占 I/O —— 收尾前查残留进程并 Stop-Process 清理。
+
+**⛔ 别从 agent 自己的 terminal 里跑 `hermes cron run`**: 该命令让 **CLI 进程本体成为 run owner**
+(`source=direct`)。工具调用一旦超时把 CLI 杀掉, 这次 run 就被记成
+`unknown` / "Scheduler restarted after this execution's owner exited before a durable terminal state",
+而它拉起的子进程(rclone 等)继续孤儿式跑下去。要手动触发: 用 `background=true` + `process_manage(wait)`
+让 CLI 活到结束, 或者干脆按上面的"临时 schedule 真 fire"走。
+
+**脚本里判成败别直接看 rclone 退出码**: 传输有错时 rclone 报 `Failed to copy with N errors` 并 **exit 1**,
+而 appdata 这类活容器的目录里, "边传边被删/改"是常态(`failed to set directory modtime`、
+`failed to open source object: Open failed: file does not exist`、qbittorrent ipc-socket)。脚本要**分类**这些
+良性 churn 错误(并设一个上限, 超了才算真失败), 否则日报天天"失败", 真失败反而淹没在噪声里;
+同时注意统计块里的 `Errors: 7 (retrying may help)` 是计数器不是错误事件, 别把它算进去。
 
 ## 长任务 cron 被"重启 drain"腰斩(桌面 App 更新是常见触发)
 

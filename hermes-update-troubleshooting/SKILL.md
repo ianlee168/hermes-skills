@@ -8,15 +8,23 @@ category: software-development
 
 On Windows, Hermes updates from the desktop app or `hermes update` both
 mutate the same checkout at `%LOCALAPPDATA%\hermes\hermes-agent`.
-Update evidence is **always** in:
+Update evidence lives in (all under `%LOCALAPPDATA%\hermes\`):
 
-- `%LOCALAPPDATA%\hermes\logs\update.log` — full update transcript
-- `%LOCALAPPDATA%\hermes\.update_check` — JSON `{"behind": N, "ver": ...}`
-- `%LOCALAPPDATA%\hermes\.update_exit_code` — last update exit code
+- `logs\update.log` — full transcript; every CLI/`hermes update` run opens
+  with `=== hermes update started <ts> ===`
+- `logs\desktop.log` — the **desktop app's own preflight**, which runs
+  *before* the CLI updater starts; its `[updates] ...` lines are the only
+  record of aborts that never reach update.log (see mode 6)
+- `.update_check` — JSON `{"behind": N, "ver": ...}`
+- `.update_exit_code` — last update exit code
+- `logs\desktop-update-handoff.log` + `logs\update_receipts\` — hand-off
+  relaunch lines and per-run receipts
 
-**Diagnose from update.log FIRST** — do not theorize. `behind: 0` +
-exit code 0 means the last update actually succeeded; the user may be
-seeing a stale failure.
+**Map the user's report to a timestamped attempt before theorizing.**
+"CLI 更新又失败了" does not pin the code path: if update.log has no run at
+the time the user reports, the app's preflight aborted (mode 6) or nothing
+ran — read `desktop.log` for that minute. `behind: 0` + exit code 0 means
+the last update actually succeeded; the user may be seeing a stale failure.
 
 ## Failure mode 1: npm EBADENGINE (the "worked before, now fails" cause)
 
@@ -180,7 +188,7 @@ venv-blocker guard runs before the log stream opens. The evidence is in
 [updates] venv-blocker scan reported 1 holder(s); re-scanning after settle (attempt 2/3)
 [updates] venv-blocked: 1 process(es) hold the install
 [updates] error: Update aborted: another Hermes process is using this installation.
-[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe <USER_HOME>\ha-doorbell\doorbell_watch.py
+[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe C:\Users\<user>\ha-doorbell\doorbell_watch.py
 ```
 
 Any process whose interpreter is the Hermes venv **or**
@@ -193,11 +201,11 @@ Fix: give the user script its own interpreter and point the launcher at it
 (2026-09-13, doorbell watcher on 50.110):
 ```bash
 cd ~/ha-doorbell
-uv venv --python "%LOCALAPPDATA%\\Programs\\Python\\Python314\\python.exe" .venv
+uv venv --python "C:/Users/<user>/AppData/Local/Programs/Python/Python314/python.exe" .venv
 uv pip install --python .venv/Scripts/python.exe websockets micloud pycryptodome requests
 # start_watcher.vbs: py = base & "\.venv\Scripts\python.exe" (+ system-python fallbacks)
 taskkill /PID <shim> /PID <child> /F
-powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"<USER_HOME>\ha-doorbell\start_watcher.vbs\"'"
+powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"C:\Users\<user>\ha-doorbell\start_watcher.vbs\"'"
 ```
 Notes: the venv `python.exe` shim + its `.hermes-runtime` child are ONE
 logical process (two PIDs, kill both), and the guard reports only the shim.
@@ -212,10 +220,177 @@ cd %LOCALAPPDATA%\hermes\hermes-agent
 `blocked: false` means the install is free — update normally (from the app
 while it runs; the app stops/relaunches its own `serve` backend).
 
+## Failure mode 6b: `git fetch timed out after 300s` (pure network, nothing local)
+
+update.log shows `✗ Failed to fetch updates from origin.` +
+`git fetch timed out after 300s with no response from the remote`, then the
+gateway is restarted and the run ends exit 1 with the checkout UNCHANGED
+(receipt `post_update.sha == pre_update.sha`, `exit_code: 1`,
+`stop_reason: sys.exit(1)`). Nothing to repair — re-run the update; a direct
+`git fetch --dry-run` in the checkout distinguishes a dead remote (fails too)
+from a transient stall during the update (succeeds in ~1s).
+
+## Failure mode 7: the relaunched gateway is invisible to Hermes's own matcher → every Windows update ends exit 1
+
+Symptom: `✓ Update complete! (git.X → v.Y)` with code, TUI, web UI and desktop
+all built, immediately followed by
+`⚠ Windows gateway restart could not be verified — no stable gateway process
+appeared after relaunch` / `✗ Windows gateway recovery failed`, exit 1, receipt
+`outcome: "partial"` + `gateway_restart.incomplete: true`. The desktop app then
+shows "更新失败" although the tree is current (`hermes update --check` →
+*Already up to date*, `git status` clean).
+
+Cause: the post-update restart spawns the gateway as an inline-source wrapper
+(`<managed-python> -I -c "…runpy.run_module('hermes_cli.main', alter_sys=True)"
+gateway run --replace`). `gateway.status._gateway_command_subcommand`
+DELIBERATELY refuses `python -c <src>` (`inline_source_flag_index` → None, bug
+class #107002), so `find_gateway_pids()` never sees that process. Prove it:
+
+```bash
+cd ~/AppData/Local/hermes/hermes-agent
+./venv/Scripts/python.exe -c "
+import psutil, subprocess
+from gateway.status import looks_like_gateway_command_line as M
+from hermes_cli.gateway import find_gateway_pids
+for p in psutil.process_iter(['pid','cmdline']):
+    c = p.info['cmdline'] or []
+    if 'gateway' in ' '.join(c).lower():
+        print(p.info['pid'], M(subprocess.list2cmdline(c)), c[:2], c[-3:])
+print('find_gateway_pids:', find_gateway_pids())"
+```
+
+A live gateway printing `False` + `[]` is this mode. Consequences beyond the
+false failure card: `hermes gateway status` says "✗ No gateway process
+detected" while `gateway_state.json` is still heartbeating every minute, and
+duplicate-launch protection is off (a second gateway can start and double-connect
+the same bot token).
+
+Same-run tell, no guessing required: the updater's fleet matrix is built from
+`gateway_state.json` (`update_cmd_fleet.py`), so it prints
+`✓ default (pid …) @ <new sha> — up to date` one line BEFORE the process-table poll
+reports "no stable gateway process appeared". Two detectors, one process, opposite
+answers = discovery bug, never a death (and never a Job Object: the pid keeps
+heartbeating minutes later).
+
+`gateway_spawn_intent_subcommand()` — the opposite-answer variant written for
+spawn-intent callers — is blind to this launcher form too: it peels the `-c` wrapper
+by scanning suffixes AFTER the source literal, and the only tokens there are
+`gateway run --replace`, which then fail its own entrypoint pre-check
+(`hermes_cli.main` / `hermes_cli/main.py` / basename `hermes[.exe]`) → `None`. So
+`tests/_fixtures/live_system_guard.py` and anything else gating on spawn intent
+shares the hole — worth mentioning in any report.
+
+Upstream: **NousResearch/hermes-agent#123490** (also #122495; #123430 is a dupe).
+Report by COMMENTING there with fresh probe output + the SHA you saw it on — the
+Windows gateway bugs are already filed and duplicated reports get auto-labeled.
+
+Fix (needs the user's explicit OK — it kills a live gateway): stop the tree, then
+start through the Scheduled Task, which uses the detectable `-m hermes_cli.main` form:
+```bash
+hermes gateway stop                   # kills the whole tree (verified); `schtasks /End` does NOT
+sleep 10; tasklist /FI "PID eq <pid>"  # confirm every PID of the tree is gone
+schtasks /Run /TN Hermes_Gateway      # never `hermes gateway start` from an agent shell: Job Object (#91675)
+sleep 30; hermes gateway status       # must print "✓ Gateway process running (PID: …)"
+```
+Verify the new one is detected AND imports its managed environment: fresh lines
+in `logs/gateway.log` with no `ModuleNotFoundError: pydantic_core._pydantic_core`
+(see mode 8), and `gateway_state.json` carrying a NEW pid + current `code_sha`.
+
+Pitfall — act on the process TREE, not the PID that `status` prints: the gateway
+re-execs itself into an inline-wrapper child (see mode 8), so the reported PID can be a
+harmless parent while the child serves and holds `gateway.lock`/`gateway_state.json`.
+Probe the tree before/after any stop:
+```bash
+powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*gateway run*' } | Select-Object ProcessId,ParentProcessId,ExecutablePath | Format-List"
+```
+`taskkill /F` and `hermes gateway stop` are both behind an approval gate. If the gate
+returns *no answer* (timeout), the command did NOT run: stop the workflow and ask the
+user in plain text — never retry, rephrase, or reach the same outcome another way.
+
+## Failure mode 8: gateway grafted the checkout's 3.11 venv onto the managed 3.14 runtime (kills cron agent turns)
+
+Symptom A — gateway log, 5× per start then give up:
+`ERROR gateway.run: Supervised task hosted_room_worker died … ModuleNotFoundError:
+No module named 'pydantic_core._pydantic_core'`, traceback importing pydantic from
+`hermes-agent\venv\Lib\site-packages` (the cp311 build) while the process runs the
+managed Python 3.14 (`tools/python-3.14.7+…\python.exe`).
+
+Symptom B — the one that hurts: **every cron agent turn fails**, e.g.
+`Last run: … error: RuntimeError: Failed to initialize OpenAI client: No module
+named 'pydantic_core._pydantic_core'`. Messaging/platforms stay connected, so this
+hides for a day.
+
+Mechanism (NOT a startup race — it is unconditional):
+`gateway/run.py::_ensure_windows_gateway_venv_imports()` (called during
+`start_gateway`) does `site.addsitedir(<candidate>/Lib/site-packages)` for candidates
+`[$VIRTUAL_ENV, <checkout>/venv]` and inserts the winner at `sys.path[0:2]`.
+`hermes_bootstrap` CLEARS `VIRTUAL_ENV` before the gateway reaches that call, so the
+only surviving candidate is `<checkout>/venv/Lib/site-packages` — a 3.11 env holding
+~30 cp311-only extension packages (pydantic_core, jiter, aiohttp, tokenizers, psutil,
+cv2, av, ctranslate2, …). Under the managed 3.14 interpreter every one of them is
+unimportable, and because that dir is inserted FIRST it shadows the correct
+`installs/<hash>/environments/<hash>/venv` that bootstrap already put on `sys.path`.
+Prove the clear + the graft in one shot:
+```bash
+cd ~/AppData/Local/hermes/hermes-agent
+./venv/Scripts/python.exe - <<'PY'   # shows the two envs and both .pyd ABI tags
+import pathlib
+for p in ('venv','../installs'):
+    for f in pathlib.Path(p).rglob('_pydantic_core*.pyd'): print(f)
+PY
+./venv/Scripts/python.exe -c "import os,sys;os.environ['VIRTUAL_ENV']=r'C:\x';import sys;sys.path.insert(0,r'C:\Users\<user>\AppData\Local\hermes\hermes-agent');import hermes_bootstrap;print('VE after bootstrap =',os.environ.get('VIRTUAL_ENV'))"
+# -> VE after bootstrap = None  (that is why the checkout venv always wins)
+```
+
+**Do NOT try to repair this by changing the launcher's interpreter — verified dead end.**
+Editing `gateway-service\Hermes_Gateway.vbs` / `.cmd` to run the checkout venv python does
+not change what serves: the gateway RE-EXECS itself onto the managed python through the same
+inline wrapper, so the Scheduled Task's process tree becomes
+`wscript → venv shim (3.11) → .hermes-runtime python (3.11) → <managed python> -I -c "…runpy.run_module('hermes_cli.main')"`.
+The 3.11 parents show up in `hermes gateway status`, while the wrapper child is the process
+that serves, holds `gateway.lock`/`gateway_state.json` and still dies of the graft — strictly
+worse than stock, because a PID-based stop then targets a harmless parent. Revert such edits:
+the launcher decides only the FIRST process, never the runtime.
+
+Also do NOT copy cp314 `.pyd` files into the 3.11 venv: the clash surface is ~30 compiled
+packages, and the 3.11 CLI legitimately uses that same site-packages tree.
+
+Upstream: **#122183** (P1; PRs #122330/#122333 converging on a selected_venv/
+ownership guard), **#122324** (P1), dupes #122556 / #122400 / #122555. Add evidence as
+a COMMENT, not a new issue. Evidence that lands well: the 5×
+`hosted_room_worker died … ModuleNotFoundError("No module named
+'pydantic_core._pydantic_core'")` loop with timestamps, both ABIs on disk
+(`<checkout>\venv\Lib\site-packages\pydantic_core\_pydantic_core.cp311-win_amd64.pyd`
+vs `installs/<id>/environments/<gen>/venv/...\_pydantic_core.cp314-win_amd64.pyd`),
+and the cron-side symptom
+`ERROR cron.scheduler: Job '<job>' failed: RuntimeError: Failed to initialize
+OpenAI client: No module named 'pydantic_core._pydantic_core'` — that is the one
+users notice, and it is easy to miss because platforms stay connected.
+
+Durable fix is upstream: `_ensure_windows_gateway_venv_imports` must skip a candidate venv
+whose compiled extensions cannot load under `sys.version_info` (or simply trust the managed
+environment `hermes_bootstrap` already put on `sys.path` rather than grafting at all). Until
+that lands, treat it as an upstream bug: messaging and platforms keep working, **cron agent
+turns fail**, and a locally patched tracked file is stashed away by the next
+`hermes update --keep-stash` anyway.
+
+Stop-loss without patching the tree: any cron job whose real work needs no model can be
+converted to a `no_agent` script job, which short-circuits before the agent/client is
+ever constructed and is therefore immune to this graft — recipe and the real-fire
+acceptance test are in skill `hermes-cron-troubleshooting` ("agent 型作业撞上 gateway 环境损坏").
+
+Depth — runtime layout, the three repro one-liners, and the process-tree probe:
+`references/windows-gateway-runtime-graft.md`.
+
 ## Fix ladder (in order)
 
 0. `grep -a "venv-blocked\|venv-blocker" %LOCALAPPDATA%\hermes\logs\desktop.log`
    → a *non-Hermes* script listed there is mode 6 (fix its launcher).
+   When the user's story doesn't match the logs, read what they actually
+   typed: `%APPDATA%\Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt`
+   tail — `hermes update` retried next to `tasklist | findstr hermes` means
+   they were fighting a blocker by hand (and looking for `hermes.exe` while
+   the holder is `python.exe`).
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
    mode you're in (EBADENGINE / stash prompt / DB lock / actually OK).
 2. `npm --version` → if in a forbidden gap, `npm install -g npm@12`.
@@ -249,3 +424,9 @@ while it runs; the app stops/relaunches its own `serve` backend).
 - The SQLite WAL-reset warning in update.log ("Hermes venv links SQLite
   ... has the WAL-reset bug → provisioning a private Python runtime")
   is auto-repaired by Hermes itself; no user action needed.
+- ❌ Do NOT open a new upstream issue before searching:
+  `gh issue list --repo NousResearch/hermes-agent --search "<signature>" --state all`.
+  Both Windows gateway bugs here (#123490, #122183) and the GBK decode crash
+  (`UnicodeDecodeError: 'gbk' codec can't decode byte 0x94` in
+  `subprocess._readerthread` → #122772) are already filed; posting a comment with a
+  NEW SHA + measured probe output is the contribution, a duplicate is noise.
