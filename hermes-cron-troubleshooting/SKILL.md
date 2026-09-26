@@ -93,6 +93,15 @@ hermes cron list --all | grep -A6 <name>      # 核对 schedule/script/deliver/n
    `.sh/.bash` → Git Bash; 其它后缀 → `sys.executable`, 所以优先写 `.py`(不赌 bash 在 PATH 上)。
 3. `hermes cron edit <id> --no-agent --script <name.py>`; prompt 字段留着当文档, 不用清。
 4. 顺带收益: 不再烧 token, 输出确定性更高。
+5. **脚本必须自带四件套**(缺任何一件都会以"看起来正常"的方式坏掉):
+   ①**每一步子进程都加显式超时** —— 作业级默认超时 3600s, 而超时后 rclone/du/find 这类子进程
+   可能变孤儿继续跑、继续占 I/O; ②**并发锁** —— 锁文件里写 `pid=`, 判"陈旧"只看"pid 还活着吗
+   + 时限", **绝不删锁文件**(删除一律要用户授权); Windows 判活用
+   `ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)`(拿到句柄即存活, 顺便 CloseHandle),
+   不要用 `os.kill(pid, 0)`; ③**追加式回执日志**(每行记 rc/耗时/报告), 次日能一眼看趋势;
+   ④**退出码语义固定**: 0 成功 / 1 真失败 / 3 已有一个实例在跑(别让它被当成失败)。
+6. 起步骨架(含上面四件套 + 良性错误分类)见 `templates/no_agent_job_script.py`: 复制到
+   `$HERMES_HOME/scripts/`, 只改顶部 CONFIG 与中间的 WORK 两段。
 
 **验收必须走真 fire, 不能用 `hermes cron run` 代替**: 那个命令是 CLI 自己当 owner(`source=direct`),
 走不到出问题的那条路径。正确做法是把 schedule 临时改成 **4-5 分钟后的某一分钟**, 等 ticker 自己 fire,
@@ -154,6 +163,11 @@ python3 -c "<本机凭证源提取 token>" | ssh <host> \
 `failed to open source object: Open failed: file does not exist`、qbittorrent ipc-socket)。脚本要**分类**这些
 良性 churn 错误(并设一个上限, 超了才算真失败), 否则日报天天"失败", 真失败反而淹没在噪声里;
 同时注意统计块里的 `Errors: 7 (retrying may help)` 是计数器不是错误事件, 别把它算进去。
+第三类要单独识别: **活库写入竞态** —— `corrupted on transfer: md5 hashes differ` 出现在正在被写的文件上
+(mongo journal / WiredTiger / `*.partial` / `*.wal` / `*.shm`), 源在读取与校验之间又被追加了。rclone 会拒绝
+这份拷贝(不会写出坏数据), 下次运行自然重试。判定规则要**同时看错误类型和路径**: 只有"哈希不符 + 路径属于
+活写区"才容忍, 其它路径的哈希不符必须报失败 —— 那才是真损坏或被静默替换的文件。
+容忍类也要把计数和文件名写进日报, 否则"容忍"就变成了"看不见"。
 
 ## 长任务 cron 被"重启 drain"腰斩(桌面 App 更新是常见触发)
 
