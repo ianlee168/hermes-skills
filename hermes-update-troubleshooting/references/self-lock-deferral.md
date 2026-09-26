@@ -1,6 +1,6 @@
 # Hermes update self-lock deferral — deep dive (2026-08-15)
 
-Verified on <WIN_HOST> (Windows 11, git-checkout install, venv at
+Verified on 50.110 (Windows 11, git-checkout install, venv at
 `%LOCALAPPDATA%\hermes\hermes-agent\venv`). Full root-cause trace of the
 "update has been deferred: the next `hermes` launch will complete it"
 message.
@@ -74,7 +74,7 @@ From an EXTERNAL terminal (agent terminal is blocked by the live-checkout
 guard: "Blocked: `git pull` would rewrite Hermes's live source checkout"):
 
 ```
-cd %LOCALAPPDATA%\hermes\hermes-agent
+cd C:\Users\<user>\AppData\Local\hermes\hermes-agent
 git pull --ff-only origin main
 hermes update
 ```

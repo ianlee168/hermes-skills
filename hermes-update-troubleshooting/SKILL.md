@@ -144,6 +144,11 @@ cd ~/AppData/Local/hermes                # HERMES_HOME
 ```
 Passes from the checkout root + fails from any other cwd = this bug.
 
+When you turn any of these repro one-liners into a probe FILE, add
+`PYTHONPATH=<checkout>`: `-c` puts the cwd on `sys.path`, a script file puts its own
+directory there instead, so the identical code fails as a file with an unrelated
+`ModuleNotFoundError` and sends you hunting the wrong bug.
+
 Timeline rule: the hand-off loads `scripts/desktop-update/windows.ps1`
 from the checkout **as it exists when the hand-off starts**, so a run
 that *pulls* the verify code still executes the old script. The false
@@ -307,6 +312,10 @@ powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \
 returns *no answer* (timeout), the command did NOT run: stop the workflow and ask the
 user in plain text — never retry, rephrase, or reach the same outcome another way.
 
+`hermes gateway stop` (and `stop --all`) CANNOT kill this gateway: the stop path shares the
+blind discovery above, so it prints success while the serving pid keeps heartbeating. Kill
+the pid recorded in `gateway_state.json` directly, then start through the Scheduled Task.
+
 ## Failure mode 8: gateway grafted the checkout's 3.11 venv onto the managed 3.14 runtime (kills cron agent turns)
 
 Symptom A — gateway log, 5× per start then give up:
@@ -320,27 +329,13 @@ Symptom B — the one that hurts: **every cron agent turn fails**, e.g.
 named 'pydantic_core._pydantic_core'`. Messaging/platforms stay connected, so this
 hides for a day.
 
-Mechanism (NOT a startup race — it is unconditional):
-`gateway/run.py::_ensure_windows_gateway_venv_imports()` (called during
-`start_gateway`) does `site.addsitedir(<candidate>/Lib/site-packages)` for candidates
-`[$VIRTUAL_ENV, <checkout>/venv]` and inserts the winner at `sys.path[0:2]`.
-`hermes_bootstrap` CLEARS `VIRTUAL_ENV` before the gateway reaches that call, so the
-only surviving candidate is `<checkout>/venv/Lib/site-packages` — a 3.11 env holding
-~30 cp311-only extension packages (pydantic_core, jiter, aiohttp, tokenizers, psutil,
-cv2, av, ctranslate2, …). Under the managed 3.14 interpreter every one of them is
-unimportable, and because that dir is inserted FIRST it shadows the correct
-`installs/<hash>/environments/<hash>/venv` that bootstrap already put on `sys.path`.
-Prove the clear + the graft in one shot:
-```bash
-cd ~/AppData/Local/hermes/hermes-agent
-./venv/Scripts/python.exe - <<'PY'   # shows the two envs and both .pyd ABI tags
-import pathlib
-for p in ('venv','../installs'):
-    for f in pathlib.Path(p).rglob('_pydantic_core*.pyd'): print(f)
-PY
-./venv/Scripts/python.exe -c "import os,sys;os.environ['VIRTUAL_ENV']=r'C:\x';import sys;sys.path.insert(0,r'C:\Users\<user>\AppData\Local\hermes\hermes-agent');import hermes_bootstrap;print('VE after bootstrap =',os.environ.get('VIRTUAL_ENV'))"
-# -> VE after bootstrap = None  (that is why the checkout venv always wins)
-```
+Mechanism (NOT a startup race — it is unconditional): `gateway/run.py`
+`_ensure_windows_gateway_venv_imports()` grafts the first existing candidate of
+`[$VIRTUAL_ENV, <checkout>/venv]` onto `sys.path[0:2]`, and `hermes_bootstrap` clears
+`VIRTUAL_ENV` before that point — so the survivor is always `<checkout>/venv` (a 3.11
+env holding ~30 cp311-only extensions) and it SHADOWS the managed env bootstrap already
+put on `sys.path`. Layout table and the read-only repros: see the reference at the end
+of this mode.
 
 **Do NOT try to repair this by changing the launcher's interpreter — verified dead end.**
 Editing `gateway-service\Hermes_Gateway.vbs` / `.cmd` to run the checkout venv python does
@@ -374,10 +369,10 @@ that lands, treat it as an upstream bug: messaging and platforms keep working, *
 turns fail**, and a locally patched tracked file is stashed away by the next
 `hermes update --keep-stash` anyway.
 
-Stop-loss without patching the tree: any cron job whose real work needs no model can be
-converted to a `no_agent` script job, which short-circuits before the agent/client is
-ever constructed and is therefore immune to this graft — recipe and the real-fire
-acceptance test are in skill `hermes-cron-troubleshooting` ("agent 型作业撞上 gateway 环境损坏").
+Two stop-loss options that do not touch the code tree (no_agent conversion for model-free cron
+jobs; renaming the legacy venv to restore per-turn subprocesses, with the pre-flight checks and
+the undo) are written up in `references/windows-gateway-runtime-graft.md`, together with the
+upstream tracking that keeps you from filing a duplicate.
 
 Depth — runtime layout, the three repro one-liners, and the process-tree probe:
 `references/windows-gateway-runtime-graft.md`.
