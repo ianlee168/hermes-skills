@@ -377,6 +377,63 @@ upstream tracking that keeps you from filing a duplicate.
 Depth — runtime layout, the three repro one-liners, and the process-tree probe:
 `references/windows-gateway-runtime-graft.md`.
 
+## Failure mode 9: hand-off watchdog kills a healthy update stalled in an unhardened `git fetch` (tree:0 clone)
+
+Symptom: desktop-driven updates die three ways in a row, **always with
+`→ Fetching updates...` as the last line of `logs/update.log`** — exit 1 with
+`git fetch timed out after 300s`, or `0x40010004`, or `124` after
+`step stalled: no stdout/stderr for 600s … cancelling its process tree`. The
+checkout never moves, so every retry re-enters the same path, and **each kill
+leaves the gateway paused** (`gateway_state.json` → `stopped`,
+`restart_requested: true`) so messaging is down until
+`schtasks /Run /TN Hermes_Gateway`.
+
+Local signature (read it before theorizing):
+```bash
+git -C ~/AppData/Local/hermes/hermes-agent config --get remote.origin.partialclonefilter   # tree:0
+git -C ~/AppData/Local/hermes/hermes-agent remote -v | grep partialclone
+ls ~/AppData/Local/hermes/hermes-agent/.git/objects/pack/*.promisor | wc -l   # ≫1 = lazy-fetch churn
+```
+A treeless (`--filter=tree:0`) install that has been retried repeatedly shows
+dozens of `*.promisor` packs (one per on-demand backfill). `update_cmd.py`'s
+fetch (`_git_run(..., network=True)`) sets **no** `GIT_NO_LAZY_FETCH` and no
+`process_group`, so git's lazy promisor children outlive the killed parent and
+hold the captured pipes — the guarded call never returns, and the outer 600s
+idle watchdog is what finally kills the tree.
+
+Fix that works (2026-09-28, 50.110, git 2.53.0): **stop using the watchdog
+path for the retry.** From an agent/CLI terminal, pre-warm the refs and then run
+the updater directly — no hand-off watchdog is watching it:
+```bash
+cd ~/AppData/Local/hermes/hermes-agent
+time git fetch origin main --progress      # 33 s cold / 1 s warm — proves the step is fine
+cd ~/AppData/Local/hermes && ./bin/hermes.exe update --yes --gateway --force --branch main --keep-stash
+```
+Observed: fetch stage cleared in seconds (`Found 1387 new commit(s)`), pull
++ pycache sweep ~2 min, whole run ~5 min, `✓ Update complete!`, gateway
+auto-restarted and fleet check `✓ default (pid …) @ <new sha> — up to date`,
+`hermes pm doctor` all-green. Do NOT kill the desktop app to "free" the
+update first: the agent's own chat backend (`hermes.exe serve`, child of
+`Hermes.exe`) dies with it and the supervising turn is lost. Expect the
+updater to stop that backend anyway (`Stopping 1 dashboard process(es)`) — the
+agent turn is interrupted there and the app respawns its backend immediately.
+
+Leftovers to report honestly after such a run:
+- the packaged desktop app is NOT rebuilt (updater skips it while running:
+  "Skipped rebuilding the desktop app: this update is running inside it"), so
+  the Electron shell keeps its old `app.asar` renderer until the user does
+  Settings → About → **Update now** or quits and runs `hermes desktop`;
+- `⚠ Could not provide git for the source completion: … [WinError 5]
+  …\tools\.previous-git-*\usr\bin\bash.exe` — the agent's own terminal runs
+  through that bundled bash, so PM cannot swap git; harmless when
+  `hermes pm doctor` reports git ✓.
+
+Upstream (report, do not patch): **#124794** (asking for
+`process_group=0` + hard timeout + `NO_LAZY_FETCH_ENV` on the updater fetch),
+#124871, #125932 (failed update leaves `.hermes-update-in-progress` gating the
+desktop ~20 min + stuck git processes), #125683 (same tree:0 root cause in the
+plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
+
 ## Fix ladder (in order)
 
 0. `grep -a "venv-blocked\|venv-blocker" %LOCALAPPDATA%\hermes\logs\desktop.log`
