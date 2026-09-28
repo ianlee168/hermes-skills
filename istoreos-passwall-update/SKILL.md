@@ -118,7 +118,7 @@ iStoreOS 厂商硬锁(hold)的包 = 只能整固件升级,别强拆:
 升级后验证:`/etc/init.d/uhttpd restart` → `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/luci.js`
 应 200(`/cgi-bin/luci` 返 403 是 iStoreOS 登录门,正常)→ passwall 进程在跑 + `google=200`。
 
-### ⚠️ 只升一半会把面板弄拄:前后端 API 错位(2026-09-28 踩)
+### ⚠️ 只升一半会把面板弄挂:前后端 API 错位(2026-09-28 踩)
 
 症状:面板某页报 `RPCError: RPC call to luci/getMountPoints failed with error -32000: Object not found`。
 原因:新前端(`luci-mod-status` / `luci-app-package-manager` 26.270 的 JS + ACL 已声明 `getMountPoints`)
@@ -144,6 +144,33 @@ opkg install luci-base luci-compat luci-mod-network luci-mod-system \
   usr/libexec/rpcd usr/share/rpcd usr/share/luci`。
 - 升 luci-base 会存下 `/etc/config/luci-opkg`(用户的 `/etc/config/luci` 保留,正常)。
 - 浏览器还会拿旧缓存的 `rpc.js`,让用户 Ctrl+Shift+R 强刷。
+
+### ⚠️ hold 的真实范围 & 路由器上已存在的每周自动更新脚本
+
+`awk '/^Package:/{p=$2} /^Status:.*hold/{print p}' /usr/lib/opkg/status` → 该机 **604 个包全被 hold**
+(kernel、所有 kmod、libc/uci/rpcd/uhttpd/firewall4/dockerd、base-files/openssl/mbedtls…)= **整个固件基线**。
+这是 iStoreOS 的策略:固件自带的包只能靠刷固件升级,所以"跳过 hold"方向是对的,但 **luci 家族被劈成两半**:
+`luci-base`/`luci-mod-network`/`luci-mod-system`/`luci-compat`/`luci-app-firewall`/`luci-app-upnp` +
+几个 `luci-i18n-*-zh-cn` 在固件里(hold),而后装的 `luci-proto-*`/`luci-mod-status`/`luci-app-package-manager`
+不在(不 hold)—— feed 一重建就只升一半 → 上面那种面板报错必然复现。
+
+该机 crontab(`crontab -l`)里已有:
+```
+* * * * * /usr/bin/uhttpd-watchdog.sh                     # 每分钟看 80/443 在不在,不在就重启 uhttpd
+30 4 * * 1 /bin/sh /root/opkg-weekly-update.sh            # 每周一自动更新
+0 4 * * 1 lua /usr/share/passwall/rule_update.lua ...     # PassWall 规则更新
+```
+`/root/opkg-weekly-update.sh` 必修的三处(已改并实测):
+1. `opkg list-upgradable | grep -v "^Multiple packages"` —— 否则提示行被当包名,每次都白报 `Unknown package Multiple`。
+2. **luci 家族用 `opkg install` 显式安装绕过 hold**,其余 hold 包照旧跳过。
+3. 升完 **必须 `/etc/init.d/rpcd restart`**(新的 `/usr/libexec/rpcd/luci` 不重启不加载;
+   实测重启后 `ubus -v list luci` 才出现 `getMountPoints`),顺带 `uhttpd restart`。
+4. 日志防膨胀用 `tail -n 1500 $LOG > $LOG.tmp && cat $LOG.tmp > $LOG`(**不要 rm**)。
+
+**改这种自动化前必须造故障实测**:建 `PATH=/root/faketest/bin:$PATH` 放一个假 `opkg`
+(分支打印 `list-upgradable`/`status` 的假输出),用 `LOG=/root/faketest/test.log sh 脚本` 跑一遍,
+断言 5 条:Multiple 过滤、固件基础包 SKIP、held luci 走 INSTALL、普通包走 UPGRADE、非 luci hold 包 SKIP。
+验证脚本逻辑而不会真动包。
 
 ## ttyd 1.7.x WebSocket 协议(免密网页终端)
 
@@ -199,6 +226,16 @@ asyncio.run(main())
 - 修复:chmod 644 三个目标文件 + init.d 755;
   还要 chmod -R a+rX /opt/open-box/openwrt/luci 修源文件,否则 update.sh
   重铺后 403 复发。
+- **2026-09-28 复发实例**:`/www/luci-static/resources/view/openbox/status.js` 变回 `-rw-------`
+  (mtime = 09-14 装包那次),`luci-app-openbox.json`(menu.d + acl.d 各一份)也是 600,
+  `/etc/init.d/openbox`、`openbox-panel` 是 700 → 用户点开 Open-Box 页就报
+  `HTTP error 403 while loading class file .../openbox/status.js`。
+  修完 `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/view/openbox/status.js` 应 200。
+- **一次扫干净所有权限坑**(比背文件清单靠谱):
+  `find /www/luci-static /usr/share/luci /usr/share/rpcd /etc/init.d -type f ! -perm -044`
+  (输出为空才算干净;修完再跑一遍复核)。
+- 两个服务的正确状态:`openbox`(内核/透明代理侧)**inactive + 未 enable 是对的**(该机透明代理归 passwall);
+  `openbox-panel`(node 面板,0.0.0.0:2026)应 running + enabled。
 - 检查端口用 netstat -tlnp,BusyBox 无 ss 命令(ss 误报 NO_LISTEN)。
 - 安装/升级前:该机 passwall 常驻启用,Open-Box 启内核前必须停 passwall,双透明代理会抢防火墙/DNS。
 - 面板 http://192.168.50.5:2026,首次访问强制设管理密码;LuCI 兜底页在 服务→Open-Box。
