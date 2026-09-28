@@ -90,6 +90,34 @@ tail -12 /tmp/pw-install.log
 - 验证三件套:`opkg list-installed | grep passwall` + `/etc/init.d/passwall enabled` +
   `curl -o /dev/null -w "%{http_code}" https://www.google.com`(经代理应 200)。
 
+## 批量更新软件包(2026-09-28 实测:62 可更新 → 实升 42)
+
+```sh
+# 1. 备份(注意 tar 用 -C /,别用相对路径 —— 会生成几十字节的空包,踩过)
+B=/root/backup-$(date +%Y%m%d); mkdir -p $B
+opkg list-installed > $B/pkgs-before.txt; uci export > $B/uci-before.txt
+tar czf $B/etc-config.tgz -C / etc/config etc/passwd etc/shadow etc/group etc/rc.local etc/init.d etc/sysctl.conf etc/dropbear etc/openwrt_release
+
+# 2. ⚠️ OpenWrt opkg 的 `opkg upgrade` **不接受空参数**(只打印用法),必须显式列包名
+P=$(opkg list-upgradable | grep -v "^Multiple" | awk '{print $1}')
+opkg upgrade $P
+```
+
+**最大的坑:`opkg list-upgradable` 会把被 hold 的包也列出来**,opkg 却拒绝装:
+日志里 `Not upgrading package X which is marked hold (flags=0x202)`。不数这行就会把 62 个
+当成都升好了(实际只升了 42)。**判断"确实升了多少"只能 `grep -c '^Upgrading' 日志`**,
+再用 `opkg list-upgradable` 复核剩余。
+
+iStoreOS 厂商硬锁(hold)的包 = 只能整固件升级,别强拆:
+`base-files`(iStoreOS 是 `61~<日期>` 自建版,源里是上游 `1674~...`,119 个文件含 /etc/init.d、
+/lib/functions,强升会用上游基础文件覆盖 iStoreOS 定制)、`libopenssl3`/`libopenssl-legacy`/
+`libopenssl-conf`/`openssl-util`/`libmbedtls21`、以及 `luci-base`/`luci-compat`/`luci-mod-network`/
+`luci-mod-system`/`luci-app-firewall`/`luci-app-upnp`/`luci-i18n-{base,firewall,upnp,dockerman}-zh-cn`。
+其余 luci-* 包(26.259 → 26.270,同一 24.10.8 源)升级是安全的,约 2 分钟。
+
+升级后验证:`/etc/init.d/uhttpd restart` → `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/luci.js`
+应 200(`/cgi-bin/luci` 返 403 是 iStoreOS 登录门,正常)→ passwall 进程在跑 + `google=200`。
+
 ## ttyd 1.7.x WebSocket 协议(免密网页终端)
 
 坑:裸 WS 连上(101)但**永远收不到输出** —— 因为缺子协议。
