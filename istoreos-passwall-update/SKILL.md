@@ -118,6 +118,33 @@ iStoreOS 厂商硬锁(hold)的包 = 只能整固件升级,别强拆:
 升级后验证:`/etc/init.d/uhttpd restart` → `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/luci.js`
 应 200(`/cgi-bin/luci` 返 403 是 iStoreOS 登录门,正常)→ passwall 进程在跑 + `google=200`。
 
+### ⚠️ 只升一半会把面板弄拄:前后端 API 错位(2026-09-28 踩)
+
+症状:面板某页报 `RPCError: RPC call to luci/getMountPoints failed with error -32000: Object not found`。
+原因:新前端(`luci-mod-status` / `luci-app-package-manager` 26.270 的 JS + ACL 已声明 `getMountPoints`)
+调用的方法在 **`luci-base`(旧 26.209,被 hold 没升)** 提供的 `/usr/libexec/rpcd/luci` 里不存在。
+**luci 系列跟 luci-base 必须同版**;hold 拦住的包不能只升一半。
+
+诊断命令(定位到底缺哪件):
+```sh
+grep -c getMountPoints /usr/libexec/rpcd/luci        # 0 = rpcd 对象里缺方法(luci-base 旧)
+grep -rln getMountPoints /usr/share/rpcd/acl.d/      # 有 = 新包 ACL/前端已经在用
+ubus -v list luci | grep -i mountpoint               # 升完后应看到 "getMountPoints":{}
+ubus call luci getMountPoints '{}'                   # 应返回真实挂载表
+```
+
+修法:**显式安装能绕过 hold**(只有 `opkg upgrade` 自动升级才被 hold 拦):
+```sh
+opkg install luci-base luci-compat luci-mod-network luci-mod-system \
+  luci-app-firewall luci-app-upnp luci-i18n-{base,firewall,upnp,dockerman}-zh-cn
+/etc/init.d/rpcd restart; /etc/init.d/uhttpd restart; rm -f /tmp/luci-indexcache*
+```
+- 回滚只能靠文件级备份——源里**只有最新版**(`opkg list luci-base` 只列 26.270),
+  旧 ipk 不在任何 feed,所以升级前必须 `tar czf … -C / www/luci-static usr/lib/lua/luci \
+  usr/libexec/rpcd usr/share/rpcd usr/share/luci`。
+- 升 luci-base 会存下 `/etc/config/luci-opkg`(用户的 `/etc/config/luci` 保留,正常)。
+- 浏览器还会拿旧缓存的 `rpc.js`,让用户 Ctrl+Shift+R 强刷。
+
 ## ttyd 1.7.x WebSocket 协议(免密网页终端)
 
 坑:裸 WS 连上(101)但**永远收不到输出** —— 因为缺子协议。
