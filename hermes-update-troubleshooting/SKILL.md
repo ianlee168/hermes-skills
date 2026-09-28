@@ -193,7 +193,7 @@ venv-blocker guard runs before the log stream opens. The evidence is in
 [updates] venv-blocker scan reported 1 holder(s); re-scanning after settle (attempt 2/3)
 [updates] venv-blocked: 1 process(es) hold the install
 [updates] error: Update aborted: another Hermes process is using this installation.
-[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe C:\Users\<user>\ha-doorbell\doorbell_watch.py
+[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe C:\Users\ianle\ha-doorbell\doorbell_watch.py
 ```
 
 Any process whose interpreter is the Hermes venv **or**
@@ -206,11 +206,11 @@ Fix: give the user script its own interpreter and point the launcher at it
 (2026-09-13, doorbell watcher on 50.110):
 ```bash
 cd ~/ha-doorbell
-uv venv --python "C:/Users/<user>/AppData/Local/Programs/Python/Python314/python.exe" .venv
+uv venv --python "C:/Users/ianle/AppData/Local/Programs/Python/Python314/python.exe" .venv
 uv pip install --python .venv/Scripts/python.exe websockets micloud pycryptodome requests
 # start_watcher.vbs: py = base & "\.venv\Scripts\python.exe" (+ system-python fallbacks)
 taskkill /PID <shim> /PID <child> /F
-powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"C:\Users\<user>\ha-doorbell\start_watcher.vbs\"'"
+powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"C:\Users\ianle\ha-doorbell\start_watcher.vbs\"'"
 ```
 Notes: the venv `python.exe` shim + its `.hermes-runtime` child are ONE
 logical process (two PIDs, kill both), and the guard reports only the shim.

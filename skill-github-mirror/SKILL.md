@@ -25,7 +25,7 @@ triggers:
 
 1. **脱敏**:密码、token(`ghp_`/`sk-`)、小米账号、密钥路径一律 `<占位符>` 或"见 gbrain"。内网 IP/端口可保留(别的 agent 需要),硬凭证不留。
 2. **零硬编**:skill 里不写死具体 IP/OS/绝对路径,用 `<ROUTER_IP>` 这类占位符。
-3. **不写"用户"**:称 "ianlee168" 或 "用户"。
+3. **不写"陛下"**:称 "ianlee168" 或 "用户"。
 4. **README 归属表**:新目录必须在 `README.md` 的"目录归属"和"谁管什么"两张表各登记一行(50.110 Windows bot → 50.161 不审,直接推)。
 5. 改 smart-home/(50.1 bot)等他人目录前先读 README,遵守原归属。
 
@@ -83,6 +83,11 @@ gh api repos/ianlee168/hermes-skills/git/trees/main --jq '.tree[].path' | grep <
 - **git 身份未配置**:`git commit` 报 "Author identity unknown" → 按第 6 步用仓库历史作者配置(ianlee168 <31464826+ianlee168@users.noreply.github.com>),别动全局配置。
 - **CRLF/LF**:patch 工具会把目标段换成 LF,git 会显示整文件改动但 diff 内容正确,不必纠结;拷贝新 SKILL.md 用 write_file(LF)即可。
 - **有未提交改动时 `git pull --rebase` 直接报错** → 先 stash -u(含 untracked)再 pull。
+- **push 挂住/报 `/dev/tty: No such device or address`**:仓库的 https remote 没带凭证、keyring 凭证助手在 agent 终端里弹不出提示符。别改全局配置,单次带 gh 的凭证助手推:
+  ```bash
+  git -c credential.helper= -c credential.helper='!gh auth git-credential' push origin main
+  ```
+  验证只能看远程(本地 `origin/main` 是上次 fetch 的陈旧值):`git ls-remote origin refs/heads/main`。
 - **push 被拒**:不要 --force,`git pull --rebase` 解冲突再推。
 
 ## 只镜像自己的
