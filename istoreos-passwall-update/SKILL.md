@@ -61,6 +61,11 @@ pgrep -af "sing-box|xray|chinadns"        # 核心进程在跑
 
 回滚:从 GitHub release 的旧 tag(如 `26.7.1-1`)下载同款 ipk 重装。
 
+第二轮实测(26.9.16 → 26.9.27,2026-09-28):资产命名规律、依赖清单与前次完全一致;
+路由器**直接** `curl -sL` GitHub release 下载即可(842157/17994 字节,秒级,无需镜像);
+这次 `opkg install` 期间 SSH **没断**(全程 exit 0),restart 那条也没断 —— 断线是"可能"不是"必然",
+但仍按 nohup 后台 + 重连查 log 走,别在前台等。本次无 `resolve_conffiles` 提示(用户改过的规则文件未被 replan)。
+
 ## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
 
 升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
@@ -127,7 +132,7 @@ asyncio.run(main())
 - 排查:改 sshd_config `LogLevel VERBOSE` + 重启,事件查看器 OpenSSH/Operational 给确切原因
   ("Failed publickey ... " / "no hostkeys")
 - 防火墙只放行局域网:`New-NetFirewallRule -RemoteAddress 192.168.50.0/24`
-- 50.161(161姐/东宫姐姐)访问 50.110 的钥匙:<USER_EMAIL> 那把公钥已写入(2026-08-12)
+- 50.161 访问 50.110 的钥匙:<user-email> 那把公钥已写入(2026-08-12)
 
 ## Open-Box 透明代理安装坑(2026-09-08 实测)
 
