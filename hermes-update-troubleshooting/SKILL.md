@@ -427,6 +427,15 @@ Verify on the real failing step: `git fetch origin main` completes (it used to d
 Do NOT conclude "re-downloading the CLI will fix it": the slowness is in the machine's
 git TLS path, so a fresh download re-runs the same slow fetch.
 
+Verified end-to-end, same file back to back (50.110, 2026-10-01): 21:35 run →
+`✗ git fetch timed out after 300s` + the 8 stale-stash warning; 22:18 run (after the
+config write, nothing else changed) → `Found 272 new commit(s)` → `✓ Update complete!
+(v0.21.5+5083.ge27448b → v0.21.5+5355.g357f51c)` in **4m25s**, receipt `outcome:
+success`, `gateway_restart.incomplete: false`, and **no** UnicodeDecodeError, no
+stale-stash warning. Same run also shows the good-path shape worth checking after any
+big jump: `apply`/`deps`/`build` stages success, desktop packaged app rebuilt, fleet
+check `✓ default (pid …) @ <sha> — up to date`.
+
 Fix that works (2026-09-28, 50.110, git 2.53.0): **stop using the watchdog
 path for the retry.** From an agent/CLI terminal, pre-warm the refs and then run
 the updater directly — no hand-off watchdog is watching it:
