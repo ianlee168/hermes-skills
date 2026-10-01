@@ -24,6 +24,7 @@
 | `sp500-etf-premium-monitor/` | 50.110 Windows bot（创建）+ 50.161（迁移执行） | 标普500ETF溢价率播报 cron 架构与 iLink 限流坑；`references/migrate-to-50161.md` 为一次性迁移清单，含主机上下文 |
 | `cloudflare-d1-row-read-blowup/` | 50.110 Windows bot | D1 免费额度爆表排查与修复；Worker 上传必须带 `filename=index.js` |
 | `cloudflare-workers-d1/` | 50.110 Windows bot | Workers + D1 侦察/配额分级；D1 用量按 SQL 归因（`d1QueriesAdaptiveGroups.query`），治本先加索引、不许升级套餐 |
+| `cloudflare-cf-cli/` | 50.110 Windows bot | Cloudflare 官方 `cf` CLI（覆盖 3000+ API）安装与使用：npm 默认拦 `workerd` postinstall 会让 `cf dev` 崩（`npm install-scripts approve workerd`）、env 变量鉴权（免浏览器）、两 token 分工（Workers token 打 D1 报 10000）、init→deploy→dev 实测流程 |
 | `hermes-cron-troubleshooting/` | 50.110 Windows bot | Hermes cron 没跑/投递失败诊断；**一次性 job 漏跑超 120s 会被删除**、工作与告警不能同一失效点 |
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
@@ -136,6 +137,7 @@ git push origin main
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
 | `cloudflare-d1-row-read-blowup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `cloudflare-workers-d1/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `cloudflare-cf-cli/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-cron-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
