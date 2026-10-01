@@ -477,8 +477,21 @@ Leftovers to report honestly after such a run:
  - **`.update_exit_code`** (1 byte) keeps the last failure code; overwritten by the next
  run — noise, not a blocker.
  - **Passing a script to native Windows python needs a native path**: `python
- /d/x/y.py` becomes `C:\d\x\y.py` (MSYS mounting is not translated) → use
- `python D:/x/y.py`.
+   /d/x/y.py` becomes `C:\d\x\y.py` (MSYS mounting is not translated) → use
+   `python D:/x/y.py`.
+ - **After a big jump the checkout has no `<checkout>/venv` at all** (0.21.5+5355:
+   gone; the runtime lives in `<HERMES_HOME>/environments`), so the holder paths in
+   modes 6/8 can no longer hold — re-scan instead of trusting the old path lists.
+ - **`hermes doctor` is the oracle for config migrations.** Fix `config.yaml` by a
+   **textual** edit (never `yaml.safe_dump` round-trip — it drops comments and
+   reformats all 600+ lines); then re-run doctor and watch the issue count fall
+   (7 → 5 after moving `custom_providers` into `providers:`, → 4 after enabling the
+   session-reset plugin). Do NOT build your own checker: importing
+   `hermes_cli.config_providers` with a bare python dies on `No module named
+   'ruamel'` (that dep lives only in the managed environment).
+ - **`hermes plugins install X` installs but does NOT enable X** — an extra
+   `hermes plugins enable X` is required (the enable step hot-reloads the running
+   gateway's plugins, no restart needed).
 
 Upstream (report, do not patch): **#124794** (asking for
 `process_group=0` + hard timeout + `NO_LAZY_FETCH_ENV` on the updater fetch),
