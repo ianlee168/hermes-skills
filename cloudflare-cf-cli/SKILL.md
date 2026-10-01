@@ -123,6 +123,31 @@ cf dev                                        # local: http://localhost:5173
 
 ## Pitfalls
 
+- **Never self-upgrade npm with `npm i -g npm@X` when the global prefix is
+  node's own `lib/node_modules`.** npm rewrites the tree it is currently running
+  from; the build/link phase can die mid-swap with
+  `MODULE_NOT_FOUND: Cannot find module 'promise-retry'` (arborist `rebuild.js`
+  → `#createBinLinks`). It usually rolls back, but do not rely on it. Deterministic
+  route: fetch the tarball and swap it by hand, with the old tree moved aside
+  (never deleted) —
+  `curl -sL -o npm.tgz https://registry.npmjs.org/npm/-/npm-<ver>.tgz && tar -xzf npm.tgz`,
+  then `mv <prefix>/lib/node_modules/npm <backup-outside-node_modules>` and
+  `cp -a package <prefix>/lib/node_modules/npm`. npm's tarball bundles all deps
+  (verify `package/node_modules` exists and is non-empty before swapping), so the
+  half-installed state cannot recur. Keep the backup OUTSIDE `node_modules/`, else
+  `npm ls -g` lists the backup as a package.
+- **npm's global prefix follows the NODE binary on PATH, not where npm lives.**
+  Invoking npm by absolute path while `node` resolves elsewhere reports the OTHER
+  prefix (`npm ls -g` shows `/usr/lib`, and npm prints
+  `does not support Node.js v20.x`). Always run npm with the intended node's bin
+  dir prepended to PATH before judging the result — otherwise you will
+  "verify" against the wrong install.
+- **Two node installs on one host (system + node-version-manager) = two npms.**
+  An interactive shell may use node ≥22 while non-interactive/ssh/cron shells fall
+  back to the system node. Anything requiring node ≥22 (`cf`, modern Wrangler) must
+  be invoked with the right PATH explicitly; check `command -v node` in the same
+  shell you are about to use.
+
 - **`timeout N cf dev` leaves the dev server alive.** `timeout` kills the `cf`
   wrapper; the `npx vite` child keeps LISTENING on 5173. Cleanup: check
   `netstat -ano | grep 5173`, confirm the PID is the vite process
