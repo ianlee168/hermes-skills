@@ -401,6 +401,32 @@ fetch (`_git_run(..., network=True)`) sets **no** `GIT_NO_LAZY_FETCH` and no
 hold the captured pipes — the guarded call never returns, and the outer 600s
 idle watchdog is what finally kills the tree.
 
+### Root cause (2026-10-01, 50.110): the Windows schannel TLS backend — not the clone
+
+The tree:0 clone is only the amplifier. **Measure the TLS backends before anything
+else** — same git, same remote, back to back:
+```bash
+cd ~/AppData/Local/hermes/hermes-agent
+time git ls-remote --heads origin main                            # schannel (default) → 57 / 36 / 29 s
+time git -c http.sslBackend=openssl ls-remote --heads origin main  # openssl          → 1.3 s
+```
+43× — that is the whole bug. `GIT_TRACE_CURL=1 git ls-remote …` shows the mechanism:
+schannel loops `renegotiating SSL/TLS connection`, then the request sits **14.4 s**
+before the response header (`=> Send header …27.621` → `<= Recv header …42.068`).
+Plain `curl` to the same host answers in 0.3-0.6 s, so it is NOT bandwidth, DNS,
+proxy (`netsh winhttp show proxy` → direct/no-proxy), or the remote.
+
+Durable fix — a config write, no code patch, survives updates, and repairs the
+**desktop-driven** path too (which the pre-warm workaround below cannot):
+```bash
+git config --global http.sslBackend openssl     # undo: git config --global --unset http.sslBackend
+cd ~/AppData/Local/hermes/hermes-agent && git config http.sslBackend openssl   # repo-local, belt+braces
+```
+Verify on the real failing step: `git fetch origin main` completes (it used to die at
+300 s) and `hermes update --check` prints `⚕ Update available: N commits behind`.
+Do NOT conclude "re-downloading the CLI will fix it": the slowness is in the machine's
+git TLS path, so a fresh download re-runs the same slow fetch.
+
 Fix that works (2026-09-28, 50.110, git 2.53.0): **stop using the watchdog
 path for the retry.** From an agent/CLI terminal, pre-warm the refs and then run
 the updater directly — no hand-off watchdog is watching it:
@@ -426,7 +452,24 @@ Leftovers to report honestly after such a run:
 - `⚠ Could not provide git for the source completion: … [WinError 5]
   …\tools\.previous-git-*\usr\bin\bash.exe` — the agent's own terminal runs
   through that bundled bash, so PM cannot swap git; harmless when
-  `hermes pm doctor` reports git ✓.
+ `hermes pm doctor` reports git ✓.
+
+ Housekeeping the failed retries leave behind (2026-10-01, same box):
+
+ - **Stale `hermes-update-autostash-*` stashes** (8 of them, 2026-06-27 → 09-21) warn
+ on every single run. Never `git stash drop` blind: **tag first** (a tag keeps the
+ stash commit AND its index/untracked parents reachable → lossless, restore with
+ `git stash apply <tag>`), then export `git stash show -p --binary "stash@{i}" >
+ <D:>\patch-i.diff`, then drop from the HIGHEST index down. Record size/date/manifest.
+ - **`state.db.pre-update-emergency-*.bak`** pile up at ~210 MB each (640 MB by
+ 2026-10-01). Check the live DB first via the SQLite `backup` API to a copy on D:,
+ then `pragma integrity_check` on the COPY — never point a checker at the live WAL DB
+ (its `-wal`/`-shm` are in use). Then move them off C:.
+ - **`.update_exit_code`** (1 byte) keeps the last failure code; overwritten by the next
+ run — noise, not a blocker.
+ - **Passing a script to native Windows python needs a native path**: `python
+ /d/x/y.py` becomes `C:\d\x\y.py` (MSYS mounting is not translated) → use
+ `python D:/x/y.py`.
 
 Upstream (report, do not patch): **#124794** (asking for
 `process_group=0` + hard timeout + `NO_LAZY_FETCH_ENV` on the updater fetch),

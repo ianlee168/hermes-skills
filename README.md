@@ -15,7 +15,7 @@
 | `istoreos-passwall-update/` | 50.110 Windows bot | PassWall 升级流程，路由器专属 |
 | `istoreos-istore-package-ops/` | 50.110 Windows bot | iStoreX 商店升级报 file_clash / opkg 装不上商店包的处理，路由器专属 |
 | `skill-github-mirror/` | 50.110 Windows bot | skill→GitHub 同步流程，所有 bot 适用 |
-| `hermes-update-troubleshooting/` | 50.110 Windows bot | Hermes 自更新故障排查（含 ZIP fallback 清构建产物坑） |
+| `hermes-update-troubleshooting/` | 50.110 Windows bot | Hermes 自更新故障排查（含 ZIP fallback 清构建产物坑；**Windows 端 fetch 反复超时/124 的真因 = schannel TLS 后端慢 43×，`http.sslBackend=openssl` 治本**） |
 | `stock-footage-keywording/` | 50.110 Windows bot | 卖家侧素材上架关键词（通用，非本机专属） |
 | `crawl4ai/` | 50.110 Windows bot | LLM 友好爬虫 crawl4ai:评估结论、安装、抽取策略、反爬实话（通用） |
 | `unraid-server-ops/` | 50.110 Windows bot | Unraid(50.1) 运维大全:user scripts / VM 救援 / docker 权限 / 插件盘点 / 备份路线;IP 保留,凭证只在 gbrain |
