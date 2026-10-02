@@ -26,7 +26,7 @@ tags: [docker, scheduling, qinglong]
 | `/api/login` | POST | 登录获取 token |
 | `/api/run/<id>` | GET | ⚠️ 返回 SPA HTML 不是日志 — 日志直接读宿主机文件(见下) |
 | `/api/crons/run` | PUT | 触发任务执行: body 是**数组** `[id]`(不是 `{"ids":[...]}`) |
-| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable`。⚠️ **id 必须是字符串** — 传数字数组 `[2362]` 会被校验判空 → **全库任务一起被停用**(2026-10-02 实测踩过: 63 个任务瞬间全变 status=1,含用户的日常签到与 55 个 JD 任务) |
+| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable`。⚠️ **id 必须是字符串**：传数字数组(`[2362]`)会被校验判空 → **全库一起操作**,两个方向都踩过: `disable` 把 63 个任务全停用；`enable` 把 55 个 JD 任务连"已停用"的意图一起**静默打开**(当晚 19:21/19:38 就用失效 cookie 跑起来了)。**调 enable/disable 前先备份全量 id+isDisabled 清单,调完立即复核 `isDisabled`**,别只看返回 code 200 |
 | `/api/envs/enable` | PUT | 启用环境变量: body 是**数组** `["id1","id2"]`(id 为字符串);禁用同理 `/api/envs/disable` |
 | `/api/dependencies` | POST | 加依赖: body 是数组 `[{"type":1,"name":"requests"}]` — **type 必须数字**(0=node/1=python3/2=linux)、**name 必须字符串**,数组/数字 name 都报 400 |
 
@@ -429,7 +429,10 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - 不用重启容器(面板按请求读库)。
 - **没有宿主机 ssh 时的修复路径(2026-10-02 实测通过)**: 用 `/api/scripts` POST 写一个修复脚本到 `/ql/data/scripts/`,脚本自己 `sqlite3.connect("/ql/data/db/database.sqlite")`、**逐行用 `os.path.exists("/proc/<pid>")` 在容器内验活**(别信面板的 pid 字段),先 `shutil.copy2` 备份 DB 到 `/ql/data/db/full_backup_<ts>.db`,再只对 `alive=False` 的行 `UPDATE Crontabs SET status=0,pid=NULL` → 建临时 cron 任务(占位 schedule)`命令=python3 /ql/data/scripts/_fix.py` → `PUT /api/crons/run` → 日志读 `log/python3/<时间戳>.log`。
 - 日志目录名 = **命令行的第一个词**(`python3 /ql/data/scripts/_fix.py` → 日志落在 `log/python3/`;`task xxx.js` → 落在 `log/<仓库名>_<脚本名>/`),按这个找目录。
-- 坑: 临时修复任务自己的行清不掉 —— 脚本运行期间它自己的 pid 是活的(会被跳过),而运行器又会在结束时把它的行重新写成 status=1 → 它会在面板上永久显示“运行中”。用完建议征得同意后删掉该临时任务。
+- 坑: 临时修复任务自己的行清不掉 —— 三招都试过、都没用: ① 脚本里补一条 `UPDATE ... WHERE id=<自己>`(运行器在进程退出时又写回 status=1 + 新 pid); ② `PUT /api/crons/disable`+`/enable`(行原样不动,status/pid 不变); ③ `/api/crons/status`(它是 setter,body 必须带 `{id,status}`,不是查运行态的接口)。**唯一办法是删掉这个临时任务** → 修完就把临时任务删掉(删除红线:先问用户),别留在面板上永远转圈。
+- **修完必须同时管住“用户屏幕上会看到什么”,否则用户会回一句“还是运行中啊”**: 面板任务列表是**一次性拉取、不自动刷新** —— 修复前打开的页面会一直显示旧行。所以答复里直接给出「Ctrl+F5 强刷」,并把临时修复任务自己那条必然存在的“运行中”提前说明(它的存在是预期,不是没修好)。
+- **判断“修没修好”只看 `/api/crons`,不看页面**: API 已干净而页面还转圈 = 页面未刷新,不是修复失败。若用户硬刷后 API 干净而页面仍有一批“运行中”,才是面板进程里的内存态残留 → 重启青龙容器;先搞清容器到底跑在哪台机器(面板 URL 可能是 DNAT/反代,别把面板 IP 当成 docker 宿主机)。
+- 现成脚本: `scripts/ql_stale_status.py`(纯 stdlib,`--check` 列残留 / `--fix` 自动部署修复脚本 + 跑临时任务 + 复核)。
 - 复核必须走 API 而不是只看库: `GET /api/crons` 的返回形状是 **`data.data[]` + `data.total`**(不是 data 直接为数组);看用户点名任务的 `pid` 是否 null、`status` 是否 0。
 
 ## YYB-Go 账号失效 → 分享版脚本集体挂 (2026-10-02 实测)
@@ -466,3 +469,4 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - `references/passwall-proxy-diagnosis.md` — 判断容器流量是否真走代理(国内外 IP 回显对比)+ PassWall 域名强制直连步骤(京东风控根因排查用)
 - `references/yyb-go-wechat-login.md` — YYB-Go(微信登录)部署 + 阿维塔/捷停车签到两案例:风控110000根因(绑错微信)、JWT字段漂移、config.json子目录隔离、静默失败调试法(2026-08-31)
 - `references/security-audit.md` — 青龙安全审计三步法(版本/暴露/入侵痕迹) + 2.20.2 红线含义 + 重装保数据事实 + 本机基线(2026-09-01)
+- `scripts/ql_stale_status.py` — 「运行中」残留体检/复位(无需宿主机 ssh): 列出 status≠0/pid 非空的行,`--fix` 则在容器内逐行 `/proc/<pid>` 验活、备份 DB、只复位进程已不存在的行,并打出后续必做项(硬刷页面/删临时任务)
