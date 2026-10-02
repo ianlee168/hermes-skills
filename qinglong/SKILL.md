@@ -106,7 +106,7 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 | 日志正文 | `GET /api/logs/detail?file=<日志目录名>/<文件名>`(key 从 `GET /api/logs` 树里取,目录名形如 `6dylan6_jdpro_jd_wskey`) |
 | 脚本正文 | `GET /api/scripts/detail?file=<相对路径>`(如 `notify.py`、`6dylan6_jdpro/jd_wskey.py`) |
 | 写/覆盖脚本 | `POST /api/scripts` body `{"filename":..,"path":"./","content":..}`(已存在则用 `PUT /api/scripts` 同形状) |
-| 直接跑一个脚本文件 | `PUT /api/scripts/run` body `{"filename":"x.py","path":""}` |
+| 跑代码/脚本(在容器内真正执行) | ⚠️ **`PUT /api/scripts/run` 是空响**:body `{"filename":"x.py","path":""}` 会返回 `{"code":200,"data":<pid>}`,但实测**时不会执行**(两个测试脚本都没落盘)→ 真要在容器里跑代码: 建一个临时 cron 任务,`command` 写任意 shell 命令(如 `python3 /ql/data/scripts/_fix.py`)、`schedule` 给个永不触发的占位(如 `5 5 29 2 *`),再 `PUT /api/crons/run ["<id>"]`,输出读任务日志 |
 
 所以「看任务日志」= 先 `GET /api/logs` 找到目录 children 里最新的 `title`,再 detail 取正文 —— 不必 ssh 宿主机、不必 docker exec。
 (`GET /api/scripts?path=/` 列根目录会 403 暂无权限;带 `?file=xxx` 反而能列出整棵树。)
@@ -427,6 +427,9 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - 可撤销前置: 把 `id,name,command,schedule,status,pid,isDisabled,last_execution_time,last_running_time,updatedAt` 导成 TSV 快照 + 用 sqlite3 的 backup API 生成 `full_backup_<ts>.db`,都丢 `/ql/data/db/`(宿主机 `/mnt/user/appdata/qinglong/db/`)。
 - 复位: `UPDATE Crontabs SET status=0, pid=NULL, queued_token=NULL WHERE id=?` — **只清进程不存在的行**(把容器 `/proc` 与宿主机 `ps -eo pid=` 合并成活 pid 集合,命中则跳过)。实测一次清 62 行后 `pid 非空=0 / status<>0=0`。
 - 不用重启容器(面板按请求读库)。
+- **没有宿主机 ssh 时的修复路径(2026-10-02 实测通过)**: 用 `/api/scripts` POST 写一个修复脚本到 `/ql/data/scripts/`,脚本自己 `sqlite3.connect("/ql/data/db/database.sqlite")`、**逐行用 `os.path.exists("/proc/<pid>")` 在容器内验活**(别信面板的 pid 字段),先 `shutil.copy2` 备份 DB 到 `/ql/data/db/full_backup_<ts>.db`,再只对 `alive=False` 的行 `UPDATE Crontabs SET status=0,pid=NULL` → 建临时 cron 任务(占位 schedule)`命令=python3 /ql/data/scripts/_fix.py` → `PUT /api/crons/run` → 日志读 `log/python3/<时间戳>.log`。
+- 日志目录名 = **命令行的第一个词**(`python3 /ql/data/scripts/_fix.py` → 日志落在 `log/python3/`;`task xxx.js` → 落在 `log/<仓库名>_<脚本名>/`),按这个找目录。
+- 坑: 临时修复任务自己的行清不掉 —— 脚本运行期间它自己的 pid 是活的(会被跳过),而运行器又会在结束时把它的行重新写成 status=1 → 它会在面板上永久显示“运行中”。用完建议征得同意后删掉该临时任务。
 - 复核必须走 API 而不是只看库: `GET /api/crons` 的返回形状是 **`data.data[]` + `data.total`**(不是 data 直接为数组);看用户点名任务的 `pid` 是否 null、`status` 是否 0。
 
 ## YYB-Go 账号失效 → 分享版脚本集体挂 (2026-10-02 实测)
