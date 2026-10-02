@@ -153,6 +153,8 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 
 **wskey 自动续期机制**(免每 30 天手动抓 pt_key): jdpro 的 jd_wskey.py / jd_wsck.py 任务读 env `JD_WSCK`(多账号用 `&` 连接),通过 appjmp 接口换新 pt_key 并**自动 PUT 回 JD_COOKIE + enable** — wskey 有效期远长于 pt_key(数月 vs 30天),抓一次自动续命。诊断: 任务日志出现「未添加JD_WSCK变量」= env 压根没建(任务本身正常);确认 5700 端口检查通过(IPPORT 已配)后,只需用户手机抓 wskey 填入。抓 wskey 也是账号授权操作,有风控风险 — cookie 刚被风控/触发过验证时缓几天再弄。
 
+**排查“cookies 怎么突然就失效了”之前先看任务到底有没有在跑**: `GET /api/crons` 把每个任务的 `last_execution_time` 按日期统计一下 —— 实测 2026-10-02 当天: 63 个任务里 50 个 last_run 停在 09-08~09-11,只有 12 个是当天跑的。也就是说那三周里 JD 任务根本没执行、没人检查过 cookie,“坚持了多久”从未被现实验证;用户问“不是能撑半个月吗”时,先把这段停摆史摆出来再谈寿命。
+
 ## 部署新脚本到青龙(2026-08-31 实测,免 API 鉴权的文件直投法)
 
 青龙容器 bind mount:宿主机 `/mnt/user/appdata/qinglong` → 容器 `/ql/data`(查 `docker inspect qinglong` 确认)。因此**不用 API 也能部署**:
@@ -322,6 +324,19 @@ docker exec qinglong sh -c 'pnpm add -g canvas --registry=https://registry.npmmi
 1. 环境变量 `JD_WSCK`,多账号用 **`&`** 分隔: `pin=A;wskey=AAA;&pin=B;wskey=BBB;`
 2. 任务 `wskey转换`(jdpro 的 jd_wskey.py,每天 11:38)会自动: 读 JD_WSCK → appjmp 接口换 pt_key → 按 pin 匹配更新对应 JD_COOKIE → 自动 enable
 3. 手动验证: 启用任务 2335 并 `PUT /api/crons/run` body `["2335"]`,看日志 "WsKey状态正常"/"wskey转换成功"
+
+### ⚠️ 判「wskey 失效」有假阳性: tokenKey=xxx 一律被当失效 (2026-10-02 实测)
+
+jd_wskey.py 的 `appjmp()` 有两条失败分支,含义完全不同:
+
+| 日志字样 | 真实含义 |
+|------|---------|
+| `pt_pin=X;WsKey状态失效` | 京东 appjmp **真返回了 fake pt_key** → wskey 确实度了 |
+| `pt_pin=X;疑似IP风控等问题 默认为失效` | genToken 接口返回 `tokenKey=xxx`(接口拒了这次请求,通常是**同 IP 请求太密/风控**)→ **脚本默认判失效,但是假阳性** |
+
+验证法:把 `jd_wskey.py` 的 `ttotp..appjmp` 函数段切出来单独跑一次(用 `/api/scripts/detail?file=6dylan6_jdpro/jd_wskey.py` 拿全文 → 切出这几个 def → prepend imports+logger+`WSKEY_UPDATE_BOOL=False` → `exec` 后在内存里对每个 pin 调 `getToken()`,**只打印成功/fake,不打印 key 本体**),看命中哪条分支。实测同一批账号:一个返回 fake(真死)、另一个返回 `tokenKey=xxx`(只是接口被拒),而后者对应的 JD_COOKIE **当时仍然活着** —— 所以拿到“疑似IP风控”不能断定 wskey 死了,更不能立刻重试。
+
+配套铁律: **同一天不要连跑多次 wskey 转换**(实测 16:34/16:49/17:02/22:42 跑 4 次后,原本能换出真 key 的两个账号当晚就被京东作废,且接口开始返回 xxx)。要重试先等 24-48h。另: 未实名账号的 wskey 比已实名的脆弱得多(同批 3 账号里未实名那 2 个先死)。
 
 ### 关键事实
 - 换出的是 **App 端 pt_key**(格式 `pp_openAAJq...`,而网页抓的没有 pp_open 前缀),更"原生"
