@@ -26,6 +26,50 @@ the time the user reports, the app's preflight aborted (mode 6) or nothing
 ran — read `desktop.log` for that minute. `behind: 0` + exit code 0 means
 the last update actually succeeded; the user may be seeing a stale failure.
 
+## Failure mode 0: a git URL rewrite (GitHub mirror) breaks the update check
+
+Symptom: the desktop About panel says 无法连接更新服务器 ("We couldn't reach
+the update server"), and update.log prints
+`⚠ Updating from fork: https://<mirror>/https://github.com/...`.
+
+Cause: `git config url."https://<mirror>/https://github.com/".insteadOf https://github.com/`
+(the usual China workaround for a slow route) changes what `git remote
+get-url origin` returns. Hermes identifies the official checkout with a strict
+regex (`hermes_cli/source_releases.py::_GITHUB_ORIGIN`,
+`^(?:https://github\.com/|git@github\.com:|ssh://git@github\.com/)...`). A
+rewritten origin stops matching, so `hermes_cli/source_check.py` skips its
+api.github.com fast path and falls back to `git ls-remote origin` with a **10s**
+budget — and a third-party mirror routinely needs 15-60s (or fails with
+`expected flush after ref listing`). Result: `error: "fetch-failed"`,
+"Could not resolve the remote branch tip". The probe also records the wrong
+origin in `~/.hermes/source-checks/<install-id>.json`, whose failure entry is
+cached for **3600s** — so the message outlives the fix.
+
+Prove it with an A/B (2 min):
+```bash
+git -C <checkout> remote get-url origin          # mirror URL = smoking gun
+git -C <checkout> config --get-regexp '^url\.'
+# the exact path the app runs:
+<HERMES_HOME>/bin/hermes.cmd --run-module hermes_cli.source_check \
+  --install-root <checkout> --home <HERMES_HOME> --git <git.exe> --force --cache-path <tmp.json>
+```
+`error: fetch-failed` with the rewrite, `error: null, behind: N` after
+`git config --unset url.<mirror>.insteadOf` = proven. Re-run the probe once
+**without** `--cache-path` to overwrite the cached failure with a success.
+
+**Never fix a slow GitHub route with `url.*.insteadOf`.** Keep
+`remote.origin.url` official and pre-warm through a second remote instead:
+`git remote add mirror https://<mirror>/https://github.com/NousResearch/hermes-agent.git`
+then `git fetch mirror refs/heads/main:refs/remotes/origin/main`. Identity and
+the update check stay intact (git still SHA-verifies every object) and the
+real update's fetch then has almost nothing to transfer.
+
+Related: a slow-but-progressing fetch is killed by the desktop hand-off's
+**600s silence watchdog** (`step stalled: no stdout/stderr for 600s`, exit
+code 124, update.log stops at `→ Fetching updates...`). Measure before
+blaming code: `git ls-remote origin` repeated 3x — 2s/30s/70s spread means the
+route, not the SSL backend.
+
 ## Failure mode 1: npm EBADENGINE (the "worked before, now fails" cause)
 
 Hermes declares an npm engine range in its package.json, e.g.
@@ -436,6 +480,22 @@ stale-stash warning. Same run also shows the good-path shape worth checking afte
 big jump: `apply`/`deps`/`build` stages success, desktop packaged app rebuilt, fleet
 check `✓ default (pid …) @ <sha> — up to date`.
 
+### If openssl is ALSO slow in the same session, it is the route — not the backend
+
+Same git, same remote, back to back, BOTH backends slow (e.g. schannel 60 s/timeout vs
+openssl 50 s/16 s) and `ls-remote` bimodal (1.8 s ↔ 47 s for the identical request) =
+packet loss on the way to GitHub's edge, and no config write fixes it. Separate the two
+in one line: `curl` to the same host answers in ~0.2 s while git needs 30-70 s. The update
+then dies of the **600 s idle watchdog** (exit 124) with no updater-level error at all,
+because the guarded fetch never returns (its lazy promisor grandchildren hold the pipes).
+Two remedies are verified to restore updates: run the updater yourself from a terminal
+(no hand-off watchdog — see the block below), or route this checkout's GitHub fetch
+through a mirror with a config write guarded by an `api.github.com` SHA comparison.
+Measurement table, the mirror recipe with its undo and its cosmetic "Updating from fork"
+side effect, and the four post-update states to check (paused gateway, stale
+`.update_exit_code`, stale desktop `app.asar`, stopped `serve` backend):
+`references/flaky-github-route-fallbacks.md`.
+
 Fix that works (2026-09-28, 50.110, git 2.53.0): **stop using the watchdog
 path for the retry.** From an agent/CLI terminal, pre-warm the refs and then run
 the updater directly — no hand-off watchdog is watching it:
@@ -474,8 +534,13 @@ Leftovers to report honestly after such a run:
  2026-10-01). Check the live DB first via the SQLite `backup` API to a copy on D:,
  then `pragma integrity_check` on the COPY — never point a checker at the live WAL DB
  (its `-wal`/`-shm` are in use). Then move them off C:.
- - **`.update_exit_code`** (1 byte) keeps the last failure code; overwritten by the next
- run — noise, not a blocker.
+ - **`.update_exit_code`** is what the DESKTOP APP reads to show "update failed", so a
+ stale `1` keeps a red card in front of a perfectly current checkout. It is written when
+ a *partial* step fails (classically `Stopping 1 dashboard process(es) … could not be
+ auto-restarted`) and only a later fully-successful gateway-mode completion rewrites it
+ — `behind: 0` does not clear it. Judge success by `logs/update_receipts/latest.json` +
+ `git rev-list --count HEAD..origin/main`, then finish with a run that has the desktop
+ app CLOSED (`references/flaky-github-route-fallbacks.md` §4).
  - **Passing a script to native Windows python needs a native path**: `python
    /d/x/y.py` becomes `C:\d\x\y.py` (MSYS mounting is not translated) → use
    `python D:/x/y.py`.
@@ -510,6 +575,9 @@ plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
    the holder is `python.exe`).
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
    mode you're in (EBADENGINE / stash prompt / DB lock / actually OK).
+   Exit `124` + `step stalled … 600s` + last line `→ Fetching updates...` = mode 9's
+   network path: measure BOTH TLS backends and the route before touching anything else
+   (`references/flaky-github-route-fallbacks.md` §1-2).
 2. `npm --version` → if in a forbidden gap, `npm install -g npm@12`.
 3. `git -C %LOCALAPPDATA%\hermes\hermes-agent status --short` → if dirty,
    either clean it or expect the interactive prompt (use CLI, not app).
@@ -531,6 +599,17 @@ plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
   as proof of failure — verify-step false negatives exist (see mode 5);
   check receipt `outcome`, `install-stamp.json` and `gateway_state.json`
   before touching anything.
+- ❌ Do NOT answer "还是不行" from the failure card or an exit code alone.
+  `✓ Update complete!` + `behind: 0` + a stale `.update_exit_code` can coexist: check
+  the four post-update states (gateway running, the flag, desktop `app.asar` freshness,
+  `serve` backend) and report which ONE of them actually needs the user.
+- ❌ Do NOT expect the desktop rebuild from an update that runs inside the app — it is
+  skipped while `Hermes.exe` holds its own files. Prove staleness with
+  `git diff --name-only <build-sha> origin/main -- apps/desktop | wc -l` and hand the
+  user the "quit the app, then update" step instead of re-clicking in place.
+- ❌ Do NOT cache a remote SHA and call a mirror's differing SHA "tampered" — an active
+  repo moves within minutes. Re-read the official SHA from `api.github.com` at compare
+  time, and never trust a mirror without that comparison.
 - ❌ Hermes only upgrades npm inside its own managed Node install; the
   system npm (`C:\Program Files\nodejs\npm.cmd`) is left alone — that's
   the one you must fix yourself.
