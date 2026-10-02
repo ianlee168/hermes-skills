@@ -26,9 +26,20 @@ tags: [docker, scheduling, qinglong]
 | `/api/login` | POST | 登录获取 token |
 | `/api/run/<id>` | GET | ⚠️ 返回 SPA HTML 不是日志 — 日志直接读宿主机文件(见下) |
 | `/api/crons/run` | PUT | 触发任务执行: body 是**数组** `[id]`(不是 `{"ids":[...]}`) |
-| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable` |
+| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable`。⚠️ **id 必须是字符串** — 传数字数组 `[2362]` 会被校验判空 → **全库任务一起被停用**(2026-10-02 实测踩过: 63 个任务瞬间全变 status=1,含用户的日常签到与 55 个 JD 任务) |
 | `/api/envs/enable` | PUT | 启用环境变量: body 是**数组** `["id1","id2"]`(id 为字符串);禁用同理 `/api/envs/disable` |
 | `/api/dependencies` | POST | 加依赖: body 是数组 `[{"type":1,"name":"requests"}]` — **type 必须数字**(0=node/1=python3/2=linux)、**name 必须字符串**,数组/数字 name 都报 400 |
+
+### env 写入的形状(2026-10-02 在 2.22 上逐一试错确认)
+
+| 操作 | 正确形状 | 报错对照 |
+|------|---------|---------|
+| 新建 env `POST /api/envs` | **数组包对象,且不能带 `status` 字段**: `[{"name":"X","value":"<值>","remarks":"说明"}]` | `{"name":..,"value":".."}` → `"value" must be an array`; 数组包对象带 `status` → `"[0].status" is not allowed` |
+| 改 env `PUT /api/envs` | 单个对象 `{"id":..,"name":..,"value":".."}`(不能带 status、不能包数组) | |
+| 启停 env `PUT /api/envs/enable|disable` | 数组,且 **id 用字符串** `["21","23"]` | 数字 id 同 crons — 慎用 |
+| 触发任务 `PUT /api/crons/run` | 数组 `["2355"]` | |
+
+写完后**必须复核两处**: `GET /api/envs` 看 status=0,以及 preload 文件出现 `export X=`(见下节)。
 
 ## 快速诊断：为什么失败多
 
@@ -159,11 +170,27 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 
 - **Discuz 论坛**(恩山/多数中文论坛): cookie 组形如 `xxxx_2132_*`(saltkey/auth/lastvisit/lastcheckfeed/lip/sid/...)。前缀是站点随机串 → 先取本站 cookiepre: `curl -s https://<站点>/ | grep -o "cookiepre[^,;]*"`(恩山 `www.right.com.cn` = `rHEX_2132_`),再从转储 `grep -o -E "<前缀>[A-Za-z0-9_]*=[^;]*"` 抽出整组拼成 cookie。
 - **必须验证是真登录态**(光有 cookie 名不算): 带 cookie 请求一次看登录特征 —— Discuz 页面出现 `action=logout` 且 `discuz_uid = '<uid>'`(游客无此串);SMZDM 用 `curl -H "Cookie: ..." 'https://zhiyou.smzdm.com/user/info/jsonp_get_current'`,里 `"smzdm_id":0` = **未登录**(SMZDM 登录态靠 `sess`;转储里没有 `sess` 就是没登录,`_aUID`/`__ckguid` 只是跟踪 cookie)。NodeSeek 同理无会话 cookie 就配不了。
-- 结论: 转储能救回"确实带登录态"的站(Discuz 系最典型),缺会话 cookie 的只能让用户在**已登录浏览器**里单独抓对应请求的 Cookie 头。
+- 结论: 转储能救回"确实带登录态"的站(Discuz 系最典型);缺会话 cookie 的只能让用户在**已登录浏览器**里单独抓对应请求的 Cookie 头。
+- ⚠️ **按特征名找会漏**: NodeSeek 的会话 cookie 叫 `session`+`smac`,名字毫无站点特征(之前的结论"NodeSeek 无会话 cookie"是错的)。找不到时改用下面「分批+二分」法。
+
+### 未知名 cookie 的定位法: 整份 jar 分批 + 二分 (2026-10-02 实测,专治"转储无域名")
+
+按站点特征名找不到会话 cookie 时:
+1. 把转储解析成唯一 `name=value` 对,按 ~45 个一批,整批当 Cookie 头打给站点的**只读接口**(如 NodeSeek `GET /api/account/credit/page-1`),看响应从"未登录"变成真数据 → 服务端只认自己的名字,无关 cookie 无害。注意: 部分批会被 Cloudflare 拦(403 `Just a moment`),那是盾不是登录失败,多跑几次/避开即可。
+2. 命中批次用**二分法**砍(每次砍一半,留仍返回真数据的半边)→ 收敛到最小集合。
+3. 实测结果: **NodeSeek = `session=<40位>; smac=<ts>-<hash>`**(`pjwt` 那个 JWT 形态 cookie 实测不需要);带上即签到成功("今天的签到收益是5个鸡腿")。
+4. 两份转储对比时注意: 同名不同值会自动刷新(session/`__cf_ob`/`cf_clearance` 等),取 smac 时间戳更大的那份即可。
+
+### crond 真实链路的三个事实 (2026-10-02 实测, 2.22)
+
+1. **env 下发链**: 面板 API 写 env → 面板重写 `/ql/shell/preload/env.sh`(每行 `export NAME=<值>`)→ 容器内 crond 触发 → `task`/`otask.sh` 里 `. $file_env` 注入 → 脚本读到。**直写 Envs 表不会触发 preload 重写**,任务照旧报 `❌ 未找到 X 环境变量`。自检命令: `grep -o 'export [A-Za-z_]*' /ql/shell/preload/env.sh`(该文件通常只有几行;写 `grep '^NAME='` 匹配不到 `export NAME=` 会误报缺失),顺带比 mtime 确认是刚刷的。
+2. **停用(status=1)会真的不执行**: 同一任务启用时 18:09 有日志、被停用后 18:24 到点**无日志**。而 `crontab -l` 里 63 行任务**全在、不按 status 过滤** → **不能拿 crontab 行数判断"任务还会不会跑"**,只认 `status`。
+3. **容器内 `task <脚本>` 不能用来验证 env**: 它不注入 env(与 crond 路径不同,`/proc/<pid>/environ` 可证)。要真验证就临时把计划改到 2 分钟后、观察日志头里 `共发现 N 个Cookie` / `❌ 未找到`,验完**立刻改回**原计划。
 
 ### 写 env 的另一条路: 直写 Envs 表(拿不到 API token 时)
 
 老版本无 `Tokens` 表(登录态在 `Auths`),拿不到 bearer token 时直改库: python3 跑
+⚠️ **直写库能改值/状态,但不会让面板重写 preload** → 任务读不到;写完必须再经 API 触发一次(如 `PUT /api/envs` 改 remarks、或 enable)把 preload 刷出来。
 `INSERT INTO Envs (value,timestamp,status,position,name,remarks,createdAt,updatedAt,isPinned,labels) VALUES (?,?,1,0,?,?,datetime('now'),datetime('now'),0,'[]')`
 — **status=1 才是启用**(禁用=0);同名已存在就 UPDATE,别插重(UNIQUE(value,name))。改完 `docker exec qinglong python3 /tmp/x.py` 复核 + `SELECT id,name,status,length(value) FROM Envs`。
 
