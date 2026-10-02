@@ -68,7 +68,11 @@ Related: a slow-but-progressing fetch is killed by the desktop hand-off's
 **600s silence watchdog** (`step stalled: no stdout/stderr for 600s`, exit
 code 124, update.log stops at `→ Fetching updates...`). Measure before
 blaming code: `git ls-remote origin` repeated 3x — 2s/30s/70s spread means the
-route, not the SSL backend.
+route, not the SSL backend. The 600s ceiling is overridable —
+`HERMES_UPDATE_STEP_IDLE_SECONDS` (and `HERMES_UPDATE_PIPE_DRAIN_SECONDS`),
+`scripts/desktop-update/windows.ps1:826-832`, undocumented and env-only (the
+Desktop must be restarted to inherit it). Raising it buys patience, never a
+route fix.
 
 ## Failure mode 1: npm EBADENGINE (the "worked before, now fails" cause)
 
@@ -479,6 +483,40 @@ success`, `gateway_restart.incomplete: false`, and **no** UnicodeDecodeError, no
 stale-stash warning. Same run also shows the good-path shape worth checking after any
 big jump: `apply`/`deps`/`build` stages success, desktop packaged app rebuilt, fleet
 check `✓ default (pid …) @ <sha> — up to date`.
+
+### The updater has its OWN 300s fetch cap — bypassing the watchdog is NOT sufficient
+
+`hermes_cli/update_cmd.py:231 NETWORK_GIT_TIMEOUT_SECONDS = 300` (hardcoded; no
+env or config override) wraps every network git call, so a terminal run dies on
+a bad window exactly like the desktop path — same `✗ Failed to fetch updates
+from origin.` + `git fetch timed out after 300s` string (2026-10-03 02:04,
+50.110). The route is BIMODAL and switches within the hour: same checkout, same
+command → 1.2s, then 101s, then >300s, then 1.2s again. So measure and retry into
+a good window instead of debugging the checkout:
+
+```bash
+time git -C ~/AppData/Local/hermes/hermes-agent fetch origin main   # 1-2s = GO
+# then immediately:  cd ~/AppData/Local/hermes && ./bin/hermes.exe update --yes --gateway --force --branch main --keep-stash
+```
+
+Proven 2026-10-03: 02:04 run died at 300s (`behind` unchanged, 142 commits);
+02:11 probe returned **1.20s**; 02:12 relaunch cleared the whole update —
+`Found 142 new commit(s)` → `✓ Update complete! (v0.21.5+5683.g10c6188 →
+v0.21.5+5825.gcc761dd)`, `behind 0`, gateway `✓ running`, weixin connected.
+
+Damage difference worth stating to the user: a **CLI** run that fails on the
+fetch restarts the gateway itself (`✓ Restarting Windows gateway profile(s)`,
+downtime ~5 min), while a **desktop** kill (124 / watchdog) leaves it paused for
+32-103 min until someone runs `schtasks /Run /TN Hermes_Gateway`.
+
+Expect the turn to die: the successful run stops the Desktop's `serve` backend
+(`⟲ Stopping 1 dashboard process(es) (the running backend no longer matches the
+updated frontend)`) and cannot restart it; the app respawns it on its own. An
+agent turn running inside the app is lost there — that is normal, not a failure.
+The run also leaves the packaged app behind: after this one,
+`apps/desktop/release/win-unpacked/resources/install-stamp.json` was **243
+`apps/desktop` files** behind HEAD, so the Electron shell keeps old code until
+the app is quit and `hermes desktop` rebuilds it.
 
 ### If openssl is ALSO slow in the same session, it is the route — not the backend
 
