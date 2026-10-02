@@ -31,6 +31,7 @@
 | `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
 | `laya-guard/` | 50.161 webui-hermes bot（Windows 支持文件由 50.110 补） | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放。**Windows 补充**:`WINDOWS-NOTES.md`(50.110 落地实测 + 两个 Windows bug + 清单哈希的 CRLF 坑)、`laya-guard.windows.vbs`(wscript 无窗口启动)、`install-windows-task.ps1`(登录触发计划任务,注意 `ExecutionTimeLimit` 默认 3 天会掐死常驻服务) |
 | `wol/` | 50.110 Windows bot | 从 NAS 唤醒 50.110 的 magic packet 发送脚本（纯 stdlib，无依赖） |
+| `qinglong/` | 50.110 Windows bot | 青龙面板（50.1 docker）运维：API 形状坑、DB 直写姿势、订阅管理、第三方签到脚本（qlhub 类）部署、从全站 cookie 转储里扒单站 cookie；内网 IP 保留，凭证只在 gbrain |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -146,6 +147,7 @@ git push origin main
 | `laya-decision-engine/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `home-assistant-api/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-windows-bash-quirks/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `qinglong/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
 
 ## 冲突常见场景
