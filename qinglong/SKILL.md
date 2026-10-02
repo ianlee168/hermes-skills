@@ -97,6 +97,20 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 | 所有任务都失败 | 环境变量缺失 | 检查 `api/envs` 是否有 pt_key |
 | 依赖安装任务失败 | npm/pnpm 依赖未安装 | 检查 "依赖管理" 页面 |
 
+### 读日志/脚本内容: 直接用 API,别去爬宿主机 (2026-10-02 实测)
+
+`/api/run/<id>` 返回 SPA HTML,但**这两条能读到真实内容**(带 Bearer token):
+
+| 需求 | 端点 |
+|------|------|
+| 日志正文 | `GET /api/logs/detail?file=<日志目录名>/<文件名>`(key 从 `GET /api/logs` 树里取,目录名形如 `6dylan6_jdpro_jd_wskey`) |
+| 脚本正文 | `GET /api/scripts/detail?file=<相对路径>`(如 `notify.py`、`6dylan6_jdpro/jd_wskey.py`) |
+| 写/覆盖脚本 | `POST /api/scripts` body `{"filename":..,"path":"./","content":..}`(已存在则用 `PUT /api/scripts` 同形状) |
+| 直接跑一个脚本文件 | `PUT /api/scripts/run` body `{"filename":"x.py","path":""}` |
+
+所以「看任务日志」= 先 `GET /api/logs` 找到目录 children 里最新的 `title`,再 detail 取正文 —— 不必 ssh 宿主机、不必 docker exec。
+(`GET /api/scripts?path=/` 列根目录会 403 暂无权限;带 `?file=xxx` 反而能列出整棵树。)
+
 ### 日志判读铁律:看结尾行,别看中间
 
 任务日志中间出现 `403 (Forbidden)`/`Response code 403`/`领取次数不足`/`火爆了跳出` **不代表故障** — 脚本在遍历子任务(签到/浏览/领奖),重复领取已领完的奖励被拒是正常流程,会继续跑下一个。唯一判据是**结尾行**:`## 完成 ✅` = 正常(中间有多少失败行都忽略);`## 失败 ❌(退出码 N)` = 真问题才查。扫日志先 `grep -E "完成 ✅|失败 ❌"` 定位结尾,再决定要不要看中间。
@@ -134,6 +148,8 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 **env 体检法(哪些变量能删)**: 逐个 grep 脚本目录确认引用,0 引用 + 宿主仓库已删/已停 = 死变量可删。常见死变量: faker3 晒单开关(isComment/isCommentPic)、smiek2121 的 gua_log_token/gua_cleancart_*(仓库2024已死,任务停用)、旧活动配置(JD_Lottery/JD_CITY_HELPSHARE/opencard_toShop/dapai/jd_dplh_* — dapai 里是 2024-05 大牌活动 ID,明显过期)。删除前先备份全量 env JSON(恢复=POST /api/envs 包数组)。2026-09-08 实测:15 个 env 清理到只剩 3 个 JD_COOKIE。
 
 **config.sh 同样有死 export 区**: 文件尾部的“其他需要的变量”段堆积旧仓库 export(guaopencard_*/guaunknownTask_*/JD_TRY/JD_CITY_HELPSHARE/jd_shop_draw_ids 占位符等),删前逐个 `grep -rl <var> scripts/` 确认 0 引用。⚠️ 尾部 export 区里有**非死项必须保留**: `IPPORT='127.0.0.1:5700'`(.py 工具连 API 用,误删全挂)。顺带修: `PipMirror` 豆瓣源(pypi.doubanio.com)已停服多年 → 清华;`AutoStartBot` 没配 bot.json(占位符)就设 false 别自启。改完 `sh -n config.sh` 验语法。
+
+**京东资产统计(jd_bean_change)报「0豆/0红包」= 大概率取数失败,不是真没豆**(2026-10-02 实测): 判据看日志里该账号段落 —— 出现 `Response code 403 (Forbidden)` / `401 (Unauthorized)` + `TotalBean API请求失败` 就是 cookie 已失效(脚本仍会打印一行「普通会员/0豆」的假报告);真·活账号的段落会多出【钱包余额】【新农场】【话费积分】等字段。收到这种日报先 `me-api` 探一次 cookie 再下结论。
 
 **wskey 自动续期机制**(免每 30 天手动抓 pt_key): jdpro 的 jd_wskey.py / jd_wsck.py 任务读 env `JD_WSCK`(多账号用 `&` 连接),通过 appjmp 接口换新 pt_key 并**自动 PUT 回 JD_COOKIE + enable** — wskey 有效期远长于 pt_key(数月 vs 30天),抓一次自动续命。诊断: 任务日志出现「未添加JD_WSCK变量」= env 压根没建(任务本身正常);确认 5700 端口检查通过(IPPORT 已配)后,只需用户手机抓 wskey 填入。抓 wskey 也是账号授权操作,有风控风险 — cookie 刚被风控/触发过验证时缓几天再弄。
 
@@ -383,6 +399,38 @@ jd_CheckCK 等任务跑完报 `telegram发送通知消息失败` + `RequestError
 ## 其他服务共用青龙 telegram bot
 
 MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 config.sh 的 TG_BOT_TOKEN/TG_USER_ID(读文件注入,别复制 token 到多处)——用户一个 bot 收全部通知。容器化第三方签到工具(浏览器自动化型)的部署/运维 → skill `microsoft-rewards-automation`。
+
+## 面板「运行中」永久转圈 = status/pid 残留 (2026-10-02 实测修复)
+
+症状: 一批任务的「状态」列一直转圈显示运行中(用户会说"以前不这样"),但 `docker exec qinglong ps -eo pid,etime,args` 里毫无对应进程。
+
+定性(两步,别猜):
+1. 容器内无脚本进程 = 面板显示的是残留,不是真在跑。
+2. 直读库 `SELECT id,name,status,pid,isDisabled,last_execution_time,updatedAt FROM Crontabs` — 残留特征: `pid` 非空且该 pid 在宿主机/容器都不存在、`status=1`;若 **updatedAt 成片毫秒级相同**(如 59 行同一时间戳),说明是某次批量状态写入(开放 API 全量 run、或误用数字 id 的批量 disable)留下的,任务完成回调没跑。注意 `last_execution_time` 存的是**秒**(不是毫秒),换算时别除 1000 把日期算成 1970。
+
+修复(先备份再改):
+- 可撤销前置: 把 `id,name,command,schedule,status,pid,isDisabled,last_execution_time,last_running_time,updatedAt` 导成 TSV 快照 + 用 sqlite3 的 backup API 生成 `full_backup_<ts>.db`,都丢 `/ql/data/db/`(宿主机 `/mnt/user/appdata/qinglong/db/`)。
+- 复位: `UPDATE Crontabs SET status=0, pid=NULL, queued_token=NULL WHERE id=?` — **只清进程不存在的行**(把容器 `/proc` 与宿主机 `ps -eo pid=` 合并成活 pid 集合,命中则跳过)。实测一次清 62 行后 `pid 非空=0 / status<>0=0`。
+- 不用重启容器(面板按请求读库)。
+- 复核必须走 API 而不是只看库: `GET /api/crons` 的返回形状是 **`data.data[]` + `data.total`**(不是 data 直接为数组);看用户点名任务的 `pid` 是否 null、`status` 是否 0。
+
+## YYB-Go 账号失效 → 分享版脚本集体挂 (2026-10-02 实测)
+
+症状: 阿维塔 + 捷停车 同时失败,脚本日志 `HTTP Error 502: Bad Gateway`(请求 `/wxapp/getCode`)。
+
+判据链(一次查清,别只测端口):
+- YYB-Go 容器日志 `keepalive: account id=N refresh failed: refresh failed: code=-109 msg=RC_PARAMS_INVALID`(每 6 分钟一条);`grep -c` 看规模、`grep -n` 首条 = 失效起始时刻(本例 09-30 16:43,此后一直没恢复)。
+- 管理 API 复核: `POST /login` 取 cookie → `GET /accounts` 看 `status`(alive/unknown);`POST /accounts/refresh {"ref":"<openid>"}` 回 `status=unknown` + `refresh_error=...RC_PARAMS_INVALID`。**`POST /accounts/resync` 救不回来** — resync 后 `rescan_recommended=true` 即只能重新扫码。
+- 宿主机 curl `:8000/` 得 303、`/health` 得 200 会被误判成"服务正常";从青龙容器打 `/wxapp/getCode` 得 502 才是真信号(与网络无关,是上游凭据死了)。
+
+修复 = 用户手机重新扫码。**可以直接把二维码递到聊天里**,不必让用户开面板:
+- `POST /qr` body `{}` → `data.session_id` + `data.image_url` = `/qr/<sid>/image`
+- `GET /qr/<sid>/image` = 二维码 JPEG(约 40-50KB);`GET /qr/<sid>/poll` 查扫码状态 —— 未扫时返回 502 `context deadline exceeded`(长轮询超时),别当故障。
+- 同一 openid 重扫会**更新原账号记录**,脚本 config.json 里的 openid 不用改;扫完用户要在手机上确认。
+- 二维码有 TTL,递给用户前现取一张新鲜的。
+- 上游仓库有 `明确过期凭据账号需重新扫码` 一类提交,说明这就是官方预期处置方式;容器镜像老(如 08-31 构建)时可顺带 `git pull` 重建,但重扫才是根治。
+
+**分享版脚本依赖在容器重建后会丢**: 捷停车报「JWT库错误」其实是 jwt 模块压根没装(`pip3 uninstall jwt` 会说 not installed)→ 装 `pyjwt`;其余自检依赖 `httpx[http2] httpx-socks python-dotenv pycryptodome` 一并 `pip3 install ... -i https://pypi.tuna.tsinghua.edu.cn/simple`。装完仍 502 = YYB-Go 账号问题,不是依赖。
 
 ## Pitfalls
 
