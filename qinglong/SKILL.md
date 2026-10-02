@@ -164,6 +164,8 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 
 依赖: 大多数脚本只需青龙内置;nodeseek 需 `pip3 install curl_cffi -i https://pypi.tuna.tsinghua.edu.cn/simple`。各脚本环境变量名见其 README(quark=QUARK_COOKIE、enshan=enshan_cookie、SMZDM=SMZDM_COOKIE、nodeseek=NODESEEK_COOKIE、顺丰=sfsyUrl 需抓包)。env 名以脚本自身 `os.getenv("...")` 为准,别照抄 README。
 
+**顺丰 `sfsyUrl` 不是 cookie**,而是一条**分享/回跳 URL**: `mcs-mimp-web.sf-express.com/mcs-mimp/share/weChat/shareGiftReceiveRedirect?...` 或 `.../mcs-mimp/share/app/shareRedirect?...`(顺丰 App/小程序 → 我的 → 积分 → 分享/赠礼 生成, 链接里带登录凭证)。脚本拿它 GET 一次,从响应里取 `_login_user_id_`/`_login_mobile_` 两个 cookie 完成登录 —— 所以抓不到、不及时都会直接失败。多账号换行分隔,可加 `@UID_xxx` 备注,脚本自述要求 URL 编码;链接等同密码且有实效(几小时~几天)。用户嫌麻烦时可先停用该任务(否则每天到点报一次 `未获取到sfsyUrl`)。
+
 ### 从"全站 cookie 转储"里扒单个平台的 cookie (2026-10-02 实测)
 
 用户常直接丢一整份浏览器 cookie 转储(几十万 token、**无域名划分**、上千个 cookie 名),按平台**特征名/前缀**定位,别指望有域名字段:
@@ -184,7 +186,7 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 ### crond 真实链路的三个事实 (2026-10-02 实测, 2.22)
 
 1. **env 下发链**: 面板 API 写 env → 面板重写 `/ql/shell/preload/env.sh`(每行 `export NAME=<值>`)→ 容器内 crond 触发 → `task`/`otask.sh` 里 `. $file_env` 注入 → 脚本读到。**直写 Envs 表不会触发 preload 重写**,任务照旧报 `❌ 未找到 X 环境变量`。自检命令: `grep -o 'export [A-Za-z_]*' /ql/shell/preload/env.sh`(该文件通常只有几行;写 `grep '^NAME='` 匹配不到 `export NAME=` 会误报缺失),顺带比 mtime 确认是刚刷的。
-2. **停用(status=1)会真的不执行**: 同一任务启用时 18:09 有日志、被停用后 18:24 到点**无日志**。而 `crontab -l` 里 63 行任务**全在、不按 status 过滤** → **不能拿 crontab 行数判断"任务还会不会跑"**,只认 `status`。
+2. **启停的真字段是 `isDisabled`(0=启用/1=停用),`status` 不是开关**: 实测两者会不一致(NodeSeek `status=1` 但 `isDisabled=0` 仍在跑;任务跑完后面板会改写 `status`)——拿 `status` 判断启停会误判。查启停一律看 `/api/crons` 返回的 `isDisabled`。`crontab -l` 里 63 行任务**全在、不按启停过滤** → 也不能拿 crontab 行数判断任务还会不会跑。
 3. **容器内 `task <脚本>` 不能用来验证 env**: 它不注入 env(与 crond 路径不同,`/proc/<pid>/environ` 可证)。要真验证就临时把计划改到 2 分钟后、观察日志头里 `共发现 N 个Cookie` / `❌ 未找到`,验完**立刻改回**原计划。
 
 ### 写 env 的另一条路: 直写 Envs 表(拿不到 API token 时)
