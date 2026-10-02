@@ -29,9 +29,10 @@ Known scripts: `immich update`, `Docker_Proxy`, `Gemini_HA_Control`, `delete.ds_
 
 ## Pitfalls that silently break update scripts
 
-- **GitHub API `/releases/latest` returns SINGLE-LINE JSON.** `grep '"tag_name"' | cut -d'"' -f4` matches the whole line, so `cut -f4` grabs the wrong field (the API `url`) — LATEST becomes `https://api.github.com/...`. The following `sed -i "s/.../$LATEST/"` dies with `unknown option to 's'` (slashes), the `&&` chain aborts, and the script stops mid-flight: backup made, compose replaced, `.env` never updated, images never pulled. **Fix:** `grep -o '"tag_name":"[^"]*"' | cut -d'"' -f4` plus a `[ -z "$LATEST" ]` guard.
+- **GitHub API `/releases/latest` tag parsing is these scripts' #1 failure mode — it has now broken TWICE, with two DIFFERENT response shapes.** (a) *compact single-line* JSON: `grep '"tag_name"' | cut -d'"' -f4` matches the whole line, so `cut -f4` grabs the wrong field (the API `url`) — LATEST becomes `https://api.github.com/...`, then `sed -i "s/.../$LATEST/"` dies with `unknown option to 's'` and the `&&` chain aborts mid-flight. (b) **pretty-printed JSON — what the API returns now** (verified live 2026-10-02: 415 lines, `  "tag_name": "v3.2.4",` **with a space after the colon**): the (a)-fix pattern `grep -o '"tag_name":"[^"]*"'` (no space) matches NOTHING → LATEST empty → the `[ -z "$LATEST" ]` guard aborts *before* anything happens, and the user just sees "Could not determine latest version from GitHub API". **Shape-independent fix** (verified against the live API *and* synthetic single-line JSON): `sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1`, plus a second, API-free source — `curl -sIL https://github.com/<owner>/<repo>/releases/latest | grep -i '^location:' | tail -1 | sed -E 's#.*/tag/##'` (the redirect target IS the tag; no rate limit, no JSON) — plus dumping the raw response to `/tmp/<app>-gh-response.json` before aborting so the next diagnosis isn't blind. **Never trust a previous "we already fixed that grep" note without re-running it against the live response.**
 - **Long `&&` chains abort silently.** No output, no error — the user just sees "didn't work". Diagnose with `set -x` or echo-after-each-step.
 - **`docker compose pull`/`up -d` may never have run** — check `docker images` for the expected new tag before blaming Docker.
+- **A killed/aborted run leaves a HALF-APPLIED upgrade**: the file edits (.env version + compose) happen *before* the pull, so a run interrupted by closing the plugin window ("closing this window will abort the execution of this script") leaves `.env`/compose claiming the NEW version while the containers still run the OLD one and no new image exists locally. Re-running is safe and self-healing: versions now match → the "Already on" branch does `pull` + `up -d` and finishes the migration. Diagnose with three cross-checks — file mtime of `.env`/`docker-compose.yml`, `docker images | grep <app>`, `docker ps` — and never report "update done" from the file version alone.
 
 ## Deploying a fix safely
 
@@ -165,12 +166,17 @@ f4:25:61              iStoreOS           → 192.168.50.5
 查法:`virsh dumpxml "<vm>" | grep -oE "52:54:00:[0-9a-f:]{6}"` ↔ `ip neigh show | grep -i <mac>`(VM 用桥接 br0 时 `virsh domifaddr` 为空,别信)。
 
 - **用户报"某 IP 磁盘/服务有问题"先核对 VM↔IP 再动手**(2026-08-27:用户把 50.161 的磁盘问题报成 50.206;206/161 差一位极易记混,用户自己也承认误导)。**判断线索:HAOS 无 LVM、无 /home** —— 看到"LVM 卷 + / 与 /home 同卷"是标准 Linux 发行版(Ubuntu 等)布局,绝不是 HAOS(其根是 erofs 只读,数据盘在 /mnt/data);`lsblk`/`df` 输出一眼可辨。
-- **让用户跑诊断命令前先确认连对机器**:输出含 `community.applications`、`/var/local` 567M、`/boot` = Unraid(50.1)根分区,不是目标 VM;让用户先 `hostname` 验证再跑 du。本机(50.110)→50.161 **无 SSH 公钥**(反向才有:50.161 的公钥已写入 50.110),需要用户在 50.161 上执行或提供凭据。
+- **让用户跑诊断命令前先确认连对机器**:输出含 `community.applications`、`/var/local` 567M、`/boot` = Unraid(50.1)根分区,不是目标 VM;让用户先 `hostname` 验证再跑 du。本机(50.110)→ 50.161 **可直连**:用户名 `ianlee168`(50.110 的 agent 公钥已在对面 `authorized_keys` 里,注释 `hermes-agent@50.110`),无需用户代跑。⚠️ **用错用户名(写 `ianlee`)会得到 `Permission denied (publickey,password)` —— 与“公钥没授权”的报错一模一样**。看到这条报错**不要**下“没授权/要用户代跑”的结论:先确认用户名、再读对面 `authorized_keys` 核注释(本机 skill 里早就写着正确用户名,先查再试,别瞎猜)。
 - **Hermes VM 磁盘**:`vdisk1.img`(150G 底层)+ 活动快照层 `vdisk1.S<ts>qcow2`(实测 182G,VM 运行中所有写入都进它)—— **快照层只增不减**,长期撑爆 cache;VM 磁盘快照层建议定期合并/清理(用户确认后)。
 
 ## Hermes VM(50.161)磁盘瘦身 & qcow2 快照链合并(2026-08-27 实测)
 
 **访问凭据先查 gbrain**(`environment/hermes-vm`):用户名 **`ianlee168`(不是 ianlee!)**、50.110 公钥认证已配好 → `ssh ianlee168@192.168.50.161` 直接进。hostname=hermes,Ubuntu LVM `/dev/mapper/ubuntu--vg-ubuntu--lv 243G`。**先查 gbrain 再试 SSH,别瞎猜用户名浪费时间**。
+
+远程查活(非交互 ssh)三个坑:
+- **非交互 ssh 的 PATH 极简**:用户级安装的工具必须写全路径(`~/.bun/bin/bun run src/cli.ts`,不是 `bun`),否则 `command not found`,而用户交互登录里明明是好的。
+- **别用 `find -maxdepth` 判“文件不在”**:`~/.hermes/profiles/<profile>/secrets/<file>` 是 5 层,`-maxdepth 4` 会漏。先 `for p in ~/.hermes/profiles/*/; do ...; done` 按 profile 逐个数。
+- **服务/插件的 secret 不一定在默认 profile**:`ps -eo args=` 看目标进程,再找它那个 profile 下的 `secrets/`(实测 webui-hermes profile 里有 key、默认 profile 没有属正常)。
 
 VM 内部磁盘满排查(用户目录大头):
 ```bash
@@ -212,6 +218,48 @@ Symptom: daily Supervisor banner "Unsupported system — Incorrect image for vir
 - ⚠️ 行菜单只有「设为默认/编辑」**不代表 YAML 模式**——本会话据此推断"需改配置"是错的,用户在 UI 直接删成功了。判 YAML 的唯一可靠法:查配置(备份包内 configuration.yaml/dashboards.yaml)里有没有该 dashboards 定义。
 - 用 computer_use 驱动 Chrome 里的 HA 页面(读侧边栏、点菜单)见技能 `ax-tree-ui-driving`。
 
+## HA 配置文件/仪表盘:文件层改法(2026-09-13 实测)
+
+改 HA 的仪表盘/卡片模板/场景/静态资源,**不需要停 VM、不需要挂盘、不需要装 SSH 插件** ——HAOS 里的 Samba 插件把 `/config` 匿名共享(guest 可写),**445 开着就是入口**:
+
+```bash
+ls //192.168.50.206/config                       # 免凭据直接列目录
+mkdir -p //192.168.50.206/config/.hermes-backup-<date>   # 先建备份目录
+cp //192.168.50.206/config/dashboards/x.yaml <备份目录>/ # 再 cp 原件(红线:先摆好 undo 路径,只增不删)
+cp 新文件 //192.168.50.206/config/dashboards/x.yaml      # 直接写回
+```
+
+- 同一台机 22222(SSH 插件)/1337(Code Server)/8099(File Editor) **都是关的**;Supervisor API 经 core 代理(`/api/hassio/...`)要专用 token,拿用户长期令牌去调会 401 —— 别绕远路。
+- **YAML 模式仪表盘改完立即生效,不用重启 HA**(每次请求重新读盘);`scenes.yaml`/`scripts.yaml` 用 `POST /api/services/scene/reload` 热加载。
+- 验证:`ws {"type":"lovelace/config","url_path":"<path>"}` → `success: true`(失败时 error.message 带行号与原因)。
+- 坑①:仪表盘里的 `!include` **以该文件所在目录为基准** → 引用上级文件要写 `../button_card_templates.yaml`。
+- 坑②:button-card 的 `button_card_templates:` 写在 `configuration.yaml` 顶层**前端读不到**,必须放进仪表盘 yaml。
+- 坑③:中文场景名会被 HA 转成拼音式 entity_id(`离家` → `scene.chi_jia`)→ 先建、reload、**回读真实 id** 再引用。
+- REST/WS 用法、令牌位置(`gbrain credentials/home-assistant`)、实体映射 → 见技能 `home-assistant-api`。
+
+### 用户会问「我能拖图标改位置吗」→ **HA 界面里拖不了,别答"能"**
+
+两个原因叠加:YAML 模式仪表盘在 UI 里**没有可视化编辑器**(只有 storage 模式有);即使改用 storage 模式,官方
+`picture-elements` 编辑器**也只有数字输入框,不支持拖拽**。要"自己拖"只能给本机工具。
+
+现成件 `~/ha-caiping-editor/`:`server.py`(只监听 127.0.0.1:8765)、`index.html`(户型图+图钉+数字微调)、
+`启动拖拽编辑器.bat`、`plan.png`。拖图钉 → 「保存到 HA」→ 刷新 HA 页面即生效;双击 bat 重启(它是会话内后台进程,
+Hermes 重启就没了)。实现要点与解析坑见 `references/ha-dashboard-file-ops.md`。
+
+用户不接受自拖时,退到:agent 改 left/top,或让用户自己用记事本开
+`//192.168.50.206/config/dashboards/<x>.yaml`(SMB 免密)。
+
+### 改完布局怎么验证(无 HA 登录态也能验收全)
+
+1. **WS 拉 `lovelace/config`**:`success=true` + 模板数/元素数对得上 = HA 真的解析了新盘上文件(比"文件写成功"强)。
+2. **抽配置里全部实体与 `/api/states` 对集合**(过滤掉 `[[[ return variables.x ]]]` 这类 JS 串)——
+   半成品仪表盘最常见的病就是占位实体,一次能抓出 22/22 全不存在。
+3. 静态资源用 `curl -o 落盘` 再 `cmp` 字节对比 —— **`-o /dev/null` 会报 size=0,误导**。
+4. 落点预览不指望 HA 界面:PIL 把图钉画在底图 png 上生成预览给用户看;
+   中文字体 `ImageFont.truetype("C:/Windows/Fonts/msyh.ttc", 40)`。
+5. 坐标要从底图真实几何算:`svg viewBox="0 0 W H"` → `left% = x/W*100`、`top% = y/H*100`,
+   房间矩形直接从 `<rect>` 读;别沿用别人凭感觉摆的百分比(实测一套坐标把客厅和卧室摆反了)。
+
 ## Web lookups via the server when local web tools are blocked
 
 If web_search/web_extract are unavailable and the local browser hits captchas (Baidu/Google) or GBK decode errors (Bing/JD/smzdm), the Unraid box's domestic broadband is a usable vantage point:
@@ -250,24 +298,24 @@ Measured from the server's domestic broadband (download fine, upstream throttled
 
 ## Local LAN backup — rclone SFTP pull to the Windows host (2026-08-06, THE working route for big data)
 
-The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
+The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\ianle\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
 
 ```bash
-rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/<user>/.ssh/id_rsa"
+rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/ianle/.ssh/id_rsa"
 rclone lsd unraid:/mnt/cache/                 # verify
 rclone copy unraid:/mnt/cache/appdata "F:/unraid-backup/appdata" --stats 15s -v
 rclone copy unraid:/mnt/cache/domains "F:/unraid-backup/domains" --stats 30s -v   # big one
 ```
 
 - **Speed ~64-71 MiB/s** (gigabit LAN incl. SSH overhead) → 287G ≈ 75 min. qBittorrent `ipc-socket` errors (`SSH_FX_FAILURE`) are normal — runtime socket, not a real file; ignore.
-- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/<user>/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
+- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/ianle/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
 - **Sparse-file caveat**: SFTP backend has no sparse handling — a vdisk tree that `du`s 357G but is logically 664G transfers as 664G. F: drive must fit LOGICAL size; ETA ≈ 2.5-3h, not 1.2h.
 - **Consistency**: copying a RUNNING VM's vdisk = hot copy (restore may need fsck). Clean backup = stop VM → re-run `rclone copy` (incremental, only the delta, minutes) → start VM. NEVER stop `openwrt` if it is the soft-router — the whole LAN dies.
 
 Why NOT SMB copy (all three dead ends hit on 50.1):
 - User shares (`appdata`/`domains`/`system`) have `shareExport="-"` in `/boot/config/shares/<name>.cfg` — SMB/NFS export DISABLED; only disk shares (Movie01/TV03/NAS/flash) are exported. Enabling needs cfg edit + `rc.samba restart` (briefly drops Movie01/TV03 clients).
 - Windows 10/11 blocks guest SMB by default: `AllowInsecureGuestAuth` under `HKLM\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters` is unset; setting it needs admin — `powershell Start-Process powershell -Verb RunAs -ArgumentList ...` pops a UAC prompt the user must click.
-- `net view \\\\192.168.50.1` from git-bash errors 1702 (GBK-garbled output, no session established).
+- `net view \\\\192.168.50.1` from git-bash errors 1702 (GBK-garbled output, no session established). ⚠️ **1702 只说明 `net view`(走 RPC)不通,不等于 SMB 不能用** —— 直接访问 UNC 路径往往正常(HA VM 的 Samba 插件就是匿名可读写的活例)。上面三条都只针对 **Unraid 自己的 user shares**(`shareExport="-"`)。
 
 ## Backup freshness, failure recovery & the cron shutdown-window pattern (2026-08-06)
 
@@ -309,8 +357,6 @@ Key facts:
 - qcow2 overlay chain (base + delta, e.g. `istore_fixed.20260511_Stable_Baseqcow2` + `istore_fixed.qcow2`) is handled transparently by `qemu-img convert`.
 - iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 <见 gbrain concepts/net-topology>**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
   ⚠️ **50.5 的访问凭证（SSH 端口/密钥/密码）、HA 备份密码、小米账号等都在 gbrain `concepts/net-topology` 页面（2026-08-12 用户批准存脑）—— 问用户要密码之前先查脑库！**（2026-08-14 用户亲训："昨天不是告诉你50.5的密码了吗？怎么又问"）
-
-⚠️ **HA 的长期访问令牌在 gbrain `credentials/home-assistant`**（2026-09-13 起）—— 用 HA REST/WS API 前先查脑库，别问用户要第二次；接入与操作流程见 skill `home-assistant-api`。
 
 ## passwall 国内延迟排查（2026-08-14 实测，全链路结论：系统正常）
 
@@ -413,6 +459,16 @@ The "cat/person pops up a thumbnail" feature = Frigate detection events + snapsh
   `(crontab -l 2>/dev/null | grep -v <name>; echo "* * * * * bash /boot/custom/scripts/<name>.sh >/dev/null 2>&1") | crontab -`
 - go2rtc container-internal API: `docker exec go2rtc wget -qO- http://127.0.0.1:1986/api/streams`.
 
+## 宿主机定时提醒(日期闸门 + 标记文件,复用青龙 TG bot)
+
+用户常要"到某天提醒我做 X"(凭证续期、订阅取消、抓 key)。放 50.1 上比 Windows 弹窗可靠(7×24 在线),且能直接用已有的青龙 bot 发 telegram。
+
+- 脚本 `/root/remind_<topic>.sh` 三段式:① `[ -f /root/.<topic>_sent ] && exit 0`;② 日期闸门 `[ "$(date +%Y%m%d)" -lt <YYYYMMDD> ] && exit 0`;③ **发送成功才写标记**(响应体含 `"ok":true`;失败不写 → 次日自动重试直到发出去)
+- cron 用**每天跑**而不是指定日期:`0 9 * * * /root/remind_<topic>.sh >> /root/<topic>.log 2>&1` —— 写成"9/20 那天"的 cron,一旦当天机器没开/漏跑就永远不补
+- 安装:`(crontab -l | grep -v <topic>; echo '0 9 * * * …') | crontab -`,再 `crontab -l | grep <topic>` 验证。**别手写 `/etc/cron.d/root`** —— 那个文件是 Unraid `update_cron` 汇总各插件 `*.cron` 生成的,手加的行游离在机制外、与 `crontab -l` 两套账难核对;要跨重启保留就写 `/boot/config/go`(root crontab 在 RAM)
+- 发送走青龙容器(它有 telegram 直连):`TG_TOKEN=$(grep -oP '(?<=TG_BOT_TOKEN=")[^"]+' /mnt/user/appdata/qinglong/config/config.sh | head -1)` → `docker exec qinglong curl -s "https://api.telegram.org/bot$TG_TOKEN/sendMessage" --data-urlencode "chat_id=<id>" --data-urlencode "text=$MSG"`(含中文/emoji/换行必须 `--data-urlencode`,不能用 `-d`)
+- **用户问"还差几天/到点了吗"先跑 `date` 再答**:会话会跨多日,提醒可能早就发过了(而用户没留意到)。判据是标记文件 `cat /root/.<topic>_sent`(内含发出时间)+ `tail /root/<topic>.log`,别按记忆里的日期推算
+
 ## Unraid 仪表板时钟 24 小时制(2026-08-28 实测)
 
 WebUI 顶部时钟格式由 `/boot/config/plugins/dynamix/dynamix.cfg` 的 `[display] date=` 控制。
@@ -459,13 +515,29 @@ for v in iStoreOS "Home Assistant" Hermes; do echo "--- $v"; virsh dumpxml "$v" 
 
 **"版本最新" ≠ "未过时"**:还要查上游仓库是否 `archived`(`curl -s https://api.github.com/repos/<owner>/<repo>` 看 `archived`/`pushed_at`)。本机三个过时项都是"版本号 == 上游最新,但上游已归档/换人":dcflachs/compose_plugin(已归档 → mstrhakr 继任,插件名不变)、scolcipitato/folder.view(已归档 → 后继 folder.view3,插件名变了,要重搭分组)、ich777/unraid-lxc-plugin(已归档,无后继)。
 
-**"硬件驱动插件还需要吗"判定法(hwmon)**:`lsmod | grep -iE "it87|nct66"` + `dmesg | grep -i <mod>` + `/sys/class/hwmon/*/name` + 插件自己的 `dynamix.system.temp/drivers.conf`。本机 SuperIO = ITE **IT8613E**。判"驱动是否来自插件":比 md5 —— 插件 txz 里的 `it87.ko.xz` 与 `/lib/modules/<uname>/kernel/drivers/hwmon/it87.ko.xz` **完全一致**(df336de3…)才算在生效;而 `nct6687-driver` 是纯占位(模块躺在 `/lib/modules/<uname>/updates/`,从未加载、dmesg 0 条、hwmon 里没有)。`/boot/config/go` 里的 `modprobe it87 force_id=0x8620` 是老芯片强制绑定参数,**别删**。
+**"硬件驱动插件还需要吗"判定法(hwmon)**:`lsmod | grep -iE "it87|nct66"` + `dmesg | grep -i <mod>` + `/sys/class/hwmon/*/name` + 插件自己的 `dynamix.system.temp/drivers.conf`。本机 SuperIO = ITE **IT8613E**。判"驱动是否来自插件":比 md5 —— 插件 txz 里的 `it87.ko.xz` 与 `/lib/modules/<uname>/kernel/drivers/hwmon/it87.ko.xz` **完全一致**(df336de3…)才算在生效;而 `nct6687-driver` 是纯占位 —— **判"这颗芯片到底在不在这个板上"必须实跑 `modprobe nct6687`**(决定性且安全:失败加载不会动已绑定的同类驱动,实测 it87/传感器读数不变):报 `No such device` = 板子上没这颗芯片,该驱动插件永远无用(一块主板只有一颗主 SuperIO,本机是 ITE IT8613E)。⚠️ **别拿 `dmesg | grep <mod>` 当"从未加载"的证据** —— dmesg 只覆盖本次开机,插件是几个月前装的,"0 条"证明不了历史;`lsmod` 为空也只能说明"现在没加载"。`/boot/config/go` 里的 `modprobe it87 force_id=0x8620` 是老芯片强制绑定参数,**别删**。
 
 **"这个插件在用吗"三查**:① `/boot/config/plugins/<name>/` 有没有 .cfg(只有 txz = 从没配置过,如 appdata.backup);② 功能痕迹(sensors.conf/drivers.conf、folder.view 的 docker.json、compose 的 projects/ 与容器 label、`/mnt/disks` 挂载);③ 卸载记录 `/boot/config/plugins-removed/*.plg`。
 
 - **UD 挂的是 NTFS 时,`unassigned.devices-plus` 是多余的**:plus 只提供 exFAT/hfs+/apfs/parted + SMB/NFS/ISO 挂载;`samba_mount.cfg`/`iso_mount.cfg` 空 + 无 exFAT/apfs 设备 = 零使用。
 - 已卸载插件的残留目录(`NerdTools/`、`buddybackup/`、`intel-gpu-top/` 的 0 字节 txz)只占 KB~百 KB 级,**flash 真大头是 `/boot/previous`(上一版 Unraid 整包,~1.1G,留着可回滚)**,别指望清插件目录腾空间。
 - **别把备份的 .plg 留在 `/boot/config/plugins/`**:rc.local 的安装循环是 `for PLUGIN in $CONFIG/plugins/*.plg`(glob 不匹配 `.plg.bak-*`,但别赌) —— 挪到阵列 trash 区。
+
+**卸载插件后怎么验证干净 / 用户问"要不要重启":**
+
+```bash
+ls -d /boot/config/plugins/<name> /usr/local/emhttp/plugins/<name>    # 配置目录、webUI 目录都应没了
+ls /boot/config/plugins/*.plg | grep <name>                           # .plg 应已不在
+ls /boot/config/plugins-removed/ | grep <name>                        # 应归档到这里(= 卸载成功证据)
+ls /var/log/plugins/ | grep <name>                                    # "已安装"注册应已注销
+grep -ri <mod> /etc/modprobe.d/ /boot/config/modprobe.d/ /boot/config/go   # 无黑名单/引用残留
+```
+
+**要不要重启 = 看 `lsmod | grep <mod>`**:为空(模块从未进过内核)→ **不用重启**,卸载只发生在文件层;残留的 `/lib/modules/<uname>/updates/<mod>.ko*` 在 RAM(`df -hT /lib/modules` 报 `rootfs`)里,下次任何重启自然消失,期间没人加载它。**别为仪式感重启** —— 这台机器一重启就断 3 台 VM + 全部容器、重挂阵列、风扇控制要重新起。
+
+**要对比"原厂镜像带不带这个文件"** → 见 `references/plugin-inventory-and-removal.md`(含本机插件判决表、只读挂 bzmodules/bzfirmware 的姿势、三个会导致假阴性的坑)。
+
+**给用户讲硬件/数值参数时的口径**:先给结论(必须留 / 可删 / 不用动),再用实测对照表说话(本期把风扇各档位跑了一遍,给"档位 → 实测 rpm"),不要只讲公式或内部偏移量 —— 用户会回"没看懂"。用户习惯用我的编号列表回话("4.删了吧 5.没看懂"),所以清单要编号、且每条自足可单独执行。
 
 ## dynamix.system.autofan 三个坑(2026-09-11 实测,50.1)
 
@@ -518,6 +590,7 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 
 ## References
 
+- `references/cpu-heat-diagnosis.md` — CPU/风扇高温全记录:hwmon 映射与 80°C 归因、qemu 热点判归属、pwm2/fan2 实测表、自建 CPU 风扇曲线接管;**夜间/持续高温归因手法**(对齐 `/var/log/cpu-fan-curve.log` 与作业时间轴、先量基线、查对方机器的关机习惯、**短作业的长热尾巴 + 候选作业清单:1 分钟粒度找上升沿,别只看正在修的那个作业**)。
 - `references/immich-update-script.md` — full bug chain + fixed script for the Immich updater (v3.0.3 → v3.1.0 case).
 - `references/cache-and-cloud-backup.md` — dated cache/VM/docker inventory + R2 sizing math (2026-08-05).
 - `references/wtr-pro-hardware.md` — WTR PRO motherboard/slot/disk inventory, no-parity finding, important-data tiers, SMART health sweep (2026-08-05).
@@ -530,3 +603,5 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 - `references/appdata-backup-source-cache-vs-user.md` — 备份源陷阱: `/mnt/cache` 缓存视图 vs `/mnt/user` 合并视图;2026-09-01 误判"陈旧文件"差点误删 481 个有效备份的完整链条、真实 appdata 构成(147G/40+容器)、隔离区三步清理法、待决策事项。
 - `references/user-scripts-inventory.md` — user scripts 盘点/清理手册: 目录与 schedule.json 结构、2026-09-09 六个脚本逐个判定、mv 式可回滚清理法、悬挂条目/悬空镜像/明文凭据三坑。
 - `references/rclone-backup-verify-and-cleanup.md` — rclone 备份三件事: 会让 rclone **永久挂起**的源类型(FIFO 命名管道等)与排除参数、逐文件校验"是否真同步"的方法、`.partial`/`.tmp-dl` 残留的删除前置校验 + 清单留证 + 释放量核对流程。
+- `references/ha-dashboard-file-ops.md` — HA 仪表盘/卡片运维: 匿名 SMB 入口与备份纪律、YAML 模式三个坑 + include 缓存、**storage 模式走 `lovelace/config/save`**、**破损卡片三查(底图 `/local/`→`/config/www/` 映射 / 实体存在性 / 落点叠图)**、验收清单(WS 解析/字节对比/PIL 预览)+ 「用户想自己拖位置」的本地拖拽编辑器实现与 yaml 解析坑。
+- `references/plugin-inventory-and-removal.md` — Unraid 插件户:本机判决表(必须留 / 可删 / 已迁移 + 复核依据)、卸载后验证清单与"要不要重启"判据、判硬件驱动插件有没有用(modprobe + hwmon + md5)、只读挂 bzmodules/bzfirmware 对比原厂的姿势与三个假阴性(未压缩 cpio、链式 cpio 早停、find maxdepth 截断)。
