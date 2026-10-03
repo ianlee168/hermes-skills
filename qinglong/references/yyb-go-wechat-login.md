@@ -72,3 +72,5 @@ token 换到了但账号 0 成功、中间零输出 → 脚本某步 return 了�
 6. 重扫**同一个微信 → openid 不变** → `scripts/config.json`(avatr) 与 `scripts/jesting/config.json` **无需改**；换了微信才要同步新 openid
 7. 验证: `docker exec -w /ql/data/scripts qinglong python3 avatr_sign.py` 与 `docker exec -w /ql/data/scripts/jesting qinglong python3 jesting.py` → 期望 `✅ 阿维塔签到成功` / `📊 成功: 1/1`
 8. 误扫/用错微信的那张: `POST /qr/<sid>/cancel` 作废掉(否则事后被 confirm 会绑错号)
+
+**不要为这类到期挂监测**(2026-10-03 陛下明确否决): 阿维塔 App 自己会提醒用户去签到, 用户从 app 知道后就来找 agent 重扫。agent 收到"阿维塔/捷停车挂了"的消息时, 直接按上面 1-8 步走(取二维码 MEDIA 发用户扫 → poll → **confirm** → 单跑验证), 全程不需用户登 YYB 后台或提供密码。
