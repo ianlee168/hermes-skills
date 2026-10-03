@@ -416,6 +416,7 @@ jd_CheckCK 等任务跑完报 `telegram发送通知消息失败` + `RequestError
 
 1. **假代理(第一层)**: `/ql/data/config/config.sh` 里 `TG_PROXY_HOST=127.0.0.1` + `TG_PROXY_PORT=1081` 指向容器内不存在的代理。容器通常能直连 telegram(验证:`docker exec qinglong curl -s -o /dev/null -w '%{http_code}' --max-time 10 https://api.telegram.org` 得 302 即通)→ cp 备份后把两个 export 置空即可;sendNotify.js 只在两值都非空时走代理,脚本下次跑即生效,不必重启容器。
 2. **bot token 被 revoke(第二层)**: 置空代理后仍失败且报 `Response code 401 (Unauthorized)` = token 死了,改配置无用。验证:`docker exec qinglong sh -c "set -a; . /ql/data/config/config.sh; set +a; curl -s https://api.telegram.org/bot\${TG_BOT_TOKEN}/getMe"` → `{"ok":false,...401}` 即死 token,只能让用户在 @BotFather → /mybots → API Token → revoke 后重新生成新 token 填回。
+   ⚠️ **反向也要成立,别只凭一条 401 就提议换 token**: 实测全库日志 24h 内只有 2 行 `401`,来自某个 JD 任务(与通知无关),而同一时刻 `getMe` 返回 `ok:true`、容器内 `sendNotify()` 实测打印 `Telegram发送通知消息成功🎉` —— 若照“看到 401 就是 token 死”处理,就会白做一次凭证轮换。判死顺序固定: **① `getMe` 看服务端真值 → ② 真发一条看响应体 `ok:true` → ③ 才谈轮换**;也别把别的会话/别的服务的“token 失效”结论直接当事实(第三方容器遇到 401/429 常常静默丢包)。这个 bot 被多个服务共用 → 真要轮换必须**两处同改**(青龙 `config/config.sh` + 对应容器 env)且旧值立即失效。
 
 其他注意:
 - 青龙自己的 `config/bot.json`(telegram 遥控青龙用)与脚本通知无关,里面 user_id/bot_token 常是占位符,别拿它当有效凭据排查

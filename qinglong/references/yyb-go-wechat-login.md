@@ -51,3 +51,24 @@ token 换到了但账号 0 成功、中间零输出 → 脚本某步 return 了�
 - 青龙容器内部端口 5700,宿主映射 6700;跨容器按名解析需 `docker network connect qinglong_default qinglong`
 - 青龙脚本目录宿主机路径 = `/mnt/user/appdata/qinglong/scripts`(bind `/mnt/user/appdata/qinglong` → `/ql/data`)
 - 凭据:gbrain `credentials/yyb-go-avatr` + `credentials/qinglong`(用户铁律:密码存脑库不落 skill)
+
+## 账号掉线识别+重扫(2026-10-03 实测闭环，阿维塔/捷停车同时挂就是这个)
+
+症状: 阿维塔日志 `❌ 出错: 连不上 YYB-Go(http://…:8000)。HTTP Error 502: Bad Gateway`，捷停车 `## 完成 ✅` 但 `📊 成功: 0/1`(静默版)。
+**那个 502 是 YYB 自己返回的、不是容器挂了** —— 容器 `/health` 200、`Up 3 weeks` 照旧。所以别先重启容器，先看账号。
+
+判据三连(任一成立就先按重扫处理):
+1. `POST /wxapp/getCode` body `{"ref":"<openid>","app_id":"wx897fdd60b4bfbade"}` → `{"code":502,"msg":"call failed: refresh account credentials: refresh failed: code=-109 msg=RC_PARAMS_INVALID"}`
+2. 容器日志: `keepalive: account id=N refresh failed: code=-109 msg=RC_PARAMS_INVALID`
+3. `GET /accounts`(需登录 cookie)里该账号 `status:"unknown"`、`rescan_recommended:true`
+账号约 **25–30 天**需重扫(与容器 Up 时长差不多时就该怀疑)。
+
+重扫流程(全程走 API，不必把密码贴聊天/让用户自己登录):
+1. `POST /login {username,password}` 拿 cookie(凭据取自 gbrain `credentials/yyb-go-avatr`，条目格式 `- 管理员: user / pass`)
+2. `POST /qr` body `{}` → `{"session_id":…,"image_url":"/qr/<sid>/image","status":"pending"}`（⚠️ 本版 `?as_base64=true` 不生效，直接取图端点）
+3. `GET /qr/<sid>/image` → 二维码 JPEG，存盘后用 MEDIA: 发给用户，让他用**手机微信**扫(必须主力微信；非主力会踩 110000)
+4. `GET /qr/<sid>/poll` → 扫完变 `{"status":"authorized","errcode":405}`
+5. ⚠️ **最后必做 `POST /qr/<sid>/confirm`** —— 网页版自动做，走 API 不调这步就永远停在 authorized(实测白扫一张)；成功后该账号 `status:"alive"`、`rescan_recommended:false`
+6. 重扫**同一个微信 → openid 不变** → `scripts/config.json`(avatr) 与 `scripts/jesting/config.json` **无需改**；换了微信才要同步新 openid
+7. 验证: `docker exec -w /ql/data/scripts qinglong python3 avatr_sign.py` 与 `docker exec -w /ql/data/scripts/jesting qinglong python3 jesting.py` → 期望 `✅ 阿维塔签到成功` / `📊 成功: 1/1`
+8. 误扫/用错微信的那张: `POST /qr/<sid>/cancel` 作废掉(否则事后被 confirm 会绑错号)
