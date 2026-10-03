@@ -8,6 +8,14 @@ tags: [docker, scheduling, qinglong]
 
 青龙面板是一个定时任务管理平台，常用于签到、监控、自动化脚本。
 
+## 协作约定(2026-10-03 陛定)
+
+- **面板的写操作只归一条会话/实例**(当前: 110妹@50.110 主会话);其它会话(同机其它聊天窗口、161姐@50.161)**只读**。理由: 已有两次真实冲突——A 会话把 `status` 写成 0(=running) 想修"运行中"反而复现症状, B 会话同时按枚举改成 1/2;且双方反复手动触发 JD 任务(不在计划时间的 16:34/16:49/17:02/22:42 四次)直接把账号送进风控敏感窗口。
+- 接手前先 `sqlite3 ... "select id,name,status,pid,isDisabled from Crontabs where pd IS NOT NULL"` + 看 `RunningInstances` 最近行, 判断有无别人正在改造; 发现别的会话在动 → **停手报告陛下**, 不要并行改。
+- 手动触发任何需要“拿账号去换凭证”的任务(jd_wskey/jd_wsck/签换类)先问陛下——这类任务多跑几次就可能被风控误判并把 cookie 自动禁用。
+- 单一写者声明已落在面板目录: 宿主机 `/mnt/user/appdata/qinglong/OWNER.md`(容器内 `/ql/data/OWNER.md`)。**动手前先读它**;owner 不是自己 → 只读诊断 + 把「要改什么/证据/回滚方案」报给陛下。
+- 定位“这是谁改的”: 先看产物 mtime → `session_search` 自己的会话(**同机其它聊天窗口也算“自己”**,别一口咬定是另一台机器的分身) → 再查另一台机的 cron/session 存储(cron 常驻看 `~/.hermes/cron/`)。别凭印象归因。
+
 ## 用户环境
 
 - **URL**: `http://50.1:6700` 或 `http://192.168.50.1:6700`
@@ -21,7 +29,7 @@ tags: [docker, scheduling, qinglong]
 | `/api/envs` | GET | 获取/管理环境变量（任务配置） |
 | `/api/crons` | GET | 获取/管理定时任务 |
 | `/api/crons` | POST | 建任务: body 是**单个对象** `{"name":..,"command":..,"schedule":..}` — **不能包数组**(包数组报 `"value" must be of type object`,与 `/api/envs` POST 要数组**相反**;多任务逐个 POST) |
-| `/api/crons` | PUT/DELETE | 改/删任务(改要完整对象 id+name+command+schedule) |
+| `/api/crons` | PUT/DELETE | 改/删任务(改要完整对象 id+name+command+schedule;删 body 是**字符串 id 数组** `["2365"]`,返回 200 即真删) |
 | `/api/user/info` | GET | 用户信息 |
 | `/api/login` | POST | 登录获取 token |
 | `/api/run/<id>` | GET | ⚠️ 返回 SPA HTML 不是日志 — 日志直接读宿主机文件(见下) |
@@ -40,6 +48,8 @@ tags: [docker, scheduling, qinglong]
 | 触发任务 `PUT /api/crons/run` | 数组 `["2355"]` | |
 
 写完后**必须复核两处**: `GET /api/envs` 看 status=0,以及 preload 文件出现 `export X=`(见下节)。
+
+⚠️ **preload 里的值是**带引号**的**(`export X='<值>'`)——拿它去探测第三方登录态前先 `strip("'\"")`,否则会把好值判成未登录(实测: 带引号探测得 `smzdm_id:0`,去掉引号同一串立刻返回正常昵称)。判"env 有没有生效"要用**去引号后的值**去请求一次第三方接口。
 
 ## 快速诊断：为什么失败多
 
@@ -75,7 +85,7 @@ curl -s http://192.168.50.1:6700/api/crons?search=&t=$(date +%s) \
 - `pid` — null=未运行/已完成，非null=正在运行
 - `last_execution_time` — 最后执行时间戳
 - `last_running_time` — 最后运行耗时（秒）
-- `status` — 0=正常，其他=异常
+- `status` — **运行态枚举,不是启停开关**: `0=运行中、1=空闲、2=已禁用、3=排队`(源码 `/ql/static/build/data/cron.js` 里 `CrontabStatus[0]="running" / [1]="idle" / [2]="disabled" / [3]="queued"`;面板「状态」列照它渲染,所以 `status=0` 的行永远显示「运行中」)。启停一律看 `isDisabled`
 
 ### 第四步：查看具体任务日志
 
@@ -204,8 +214,10 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 ### crond 真实链路的三个事实 (2026-10-02 实测, 2.22)
 
 1. **env 下发链**: 面板 API 写 env → 面板重写 `/ql/shell/preload/env.sh`(每行 `export NAME=<值>`)→ 容器内 crond 触发 → `task`/`otask.sh` 里 `. $file_env` 注入 → 脚本读到。**直写 Envs 表不会触发 preload 重写**,任务照旧报 `❌ 未找到 X 环境变量`。自检命令: `grep -o 'export [A-Za-z_]*' /ql/shell/preload/env.sh`(该文件通常只有几行;写 `grep '^NAME='` 匹配不到 `export NAME=` 会误报缺失),顺带比 mtime 确认是刚刷的。
-2. **启停的真字段是 `isDisabled`(0=启用/1=停用),`status` 不是开关**: 实测两者会不一致(NodeSeek `status=1` 但 `isDisabled=0` 仍在跑;任务跑完后面板会改写 `status`)——拿 `status` 判断启停会误判。查启停一律看 `/api/crons` 返回的 `isDisabled`。`crontab -l` 里 63 行任务**全在、不按启停过滤** → 也不能拿 crontab 行数判断任务还会不会跑。
+2. **启停的真字段是 `isDisabled`(0=启用/1=停用),`status` 不是开关**: 实测两者会不一致(NodeSeek `status=1` 但 `isDisabled=0` 仍在跑;任务跑完后面板会改写 `status`)——拿 `status` 判断启停会误判。查启停一律看 `/api/crons` 返回的 `isDisabled`。**停用在系统 crontab 里的落地方式 = 把该行注释掉**(`# 38 11 * * * … ID=2335`),所以 `crontab -l | grep -c <仓库名>` 会把已停用的行也数进去 → 判断"到底停没停"要数**不以 `#` 开头**的行,别只看总数。
 3. **容器内 `task <脚本>` 不能用来验证 env**: 它不注入 env(与 crond 路径不同,`/proc/<pid>/environ` 可证)。要真验证就临时把计划改到 2 分钟后、观察日志头里 `共发现 N 个Cookie` / `❌ 未找到`,验完**立刻改回**原计划。
+4. **上一轮实例没退干净 → 到点的下一次调度被跳过**: 随机延迟期间进程一直活着并占着 pid,面板判定「已在运行」就不再拉起(实测 18:09 启动的实例睡到 18:22,18:39 那次到点**无日志**)。排查: `ps -eo pid,etime,args | grep <脚本>` 看长时间挂着的实例;要做按计划的真实验证,先 kill 陈旧实例再清 pid(见「运行中」节),否则会误判成"调度没生效"。
+5. **env 快照在进程启动那一刻**: `otask.sh` 启动时 `. $file_env`,而「未找到 X 环境变量」的打印在**随机延迟之后** —— env 是这一轮跑到一半才写进 preload 的,这轮仍会报缺失;别据此判定 env 没下发,核对 preload 里的值本身。
 
 ### 写 env 的另一条路: 直写 Envs 表(拿不到 API token 时)
 
@@ -264,7 +276,7 @@ faker3(shufflewzc/faker3) 更新变慢后, 社区主流转向 **6dylan6/jdpro**(
 - `27 8,12,16,20,0 * * *` = 每天 5 次(00:27/08:27/12:27/16:27/20:27),批量建订阅的常见默认,对拉库是浪费
 - 订阅只刷新本地脚本,**任务执行时才读脚本** → 拉库频率只决定拿上游修复的滞后时间,≠ 任务执行频率
 - 日更仓库 1-2 次/天足够(`30 1,13 * * *` 凌晨+午后),更新慢的 1 次/天;5 次/天徒耗 GitHub 匿名配额,易触发限流
-- 订阅带 autoAddCron=1 时上游每加脚本自动建任务且**默认启用** → 已废弃仓库的订阅不删,上游一更新就和主力仓库双跑
+- 订阅带 autoAddCron=1 时上游每加脚本自动建任务且**默认启用** → 已废弃仓库的订阅不删,上游一更新就和主力仓库双跑;更要紧的是**它会把用户手动停用的任务重新启用**(实测: 手动停用的 55 条任务在当日 01:30 拉库后又跑起来)。要"长效停用"必须三选一并在动手前告知取舍: 关该订阅的 `autoAddCron` / 把计划改成远期占位(如 `0 0 1 1 *`) / 停用订阅本身。
 
 ### 整仓库退役清理(遵守删除红线:先备份、可撤销)
 
@@ -415,17 +427,20 @@ jd_CheckCK 等任务跑完报 `telegram发送通知消息失败` + `RequestError
 
 MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 config.sh 的 TG_BOT_TOKEN/TG_USER_ID(读文件注入,别复制 token 到多处)——用户一个 bot 收全部通知。容器化第三方签到工具(浏览器自动化型)的部署/运维 → skill `microsoft-rewards-automation`。
 
+**推送纪律(用户明确要求)**: 用户要的是**每天 1-2 条汇总**(状态 + 余额/结果 + 较昨日变化),不是逐条日志。第三方容器常见默认行为是**每一条日志各发一条 TG**(搜索得分 +3、失败各一条),接之前先查并关掉它的通知开关;共用同一个 bot 时,任何一个服务刷屏都会让用户把全部通知都嫌吵。
+
 ## 面板「运行中」永久转圈 = status/pid 残留 (2026-10-02 实测修复)
 
 症状: 一批任务的「状态」列一直转圈显示运行中(用户会说"以前不这样"),但 `docker exec qinglong ps -eo pid,etime,args` 里毫无对应进程。
 
-定性(两步,别猜):
+定性(先分清「胶囊」的两个来源,别猜):
+0. **面板「状态」列的胶囊由 `RunningInstances` 表(运行实例记录)决定,不是 `Crontabs.status`**。`RunningInstances(cron_id,pid,log_path,started_at,finished_at,status,exit_code)` — `status=1` = 运行中,其余档位(正常结束等)不显示。**只清 `Crontabs` 的 pid/status 往往对页面完全无效**(实测: 清完用户仍看到一片「运行中」),必须先 `select status,count(*) from RunningInstances group by status;`,把 `pid` 在容器内 `/proc/<pid>` 查不到的 `status=1` 行标成「已结束」那一档,胶囊即消失。任务结束回调**静默失败**时会不断长出新残留: 面板容器重启后 `/ql/data/config/token.json` 与它内部 app 令牌错位,结束回调 `PUT /open/crons/status` 收 401 而日志里什么都不打 → 先修令牌,否则清完还会再长。
 1. 容器内无脚本进程 = 面板显示的是残留,不是真在跑。
 2. 直读库 `SELECT id,name,status,pid,isDisabled,last_execution_time,updatedAt FROM Crontabs` — 残留特征: `pid` 非空且该 pid 在宿主机/容器都不存在、`status=1`;若 **updatedAt 成片毫秒级相同**(如 59 行同一时间戳),说明是某次批量状态写入(开放 API 全量 run、或误用数字 id 的批量 disable)留下的,任务完成回调没跑。注意 `last_execution_time` 存的是**秒**(不是毫秒),换算时别除 1000 把日期算成 1970。
 
 修复(先备份再改):
 - 可撤销前置: 把 `id,name,command,schedule,status,pid,isDisabled,last_execution_time,last_running_time,updatedAt` 导成 TSV 快照 + 用 sqlite3 的 backup API 生成 `full_backup_<ts>.db`,都丢 `/ql/data/db/`(宿主机 `/mnt/user/appdata/qinglong/db/`)。
-- 复位: `UPDATE Crontabs SET status=0, pid=NULL, queued_token=NULL WHERE id=?` — **只清进程不存在的行**(把容器 `/proc` 与宿主机 `ps -eo pid=` 合并成活 pid 集合,命中则跳过)。实测一次清 62 行后 `pid 非空=0 / status<>0=0`。
+- 复位(**值别写反**): `UPDATE Crontabs SET status=<目标态>, pid=NULL, queued_token=NULL WHERE id=?` — 只清「`/proc/<pid>` 查不到」的行(命中即跳过),`status` 按任务目标态写字面值: 该任务启用→**`1`(空闲)**,该任务停用→**`2`(禁用)**。**绝不写 0**: 0 是「运行中」,写 0 等于把症状原样复现——同一坑两个 agent 各踩一次(修复脚本里的 `SET status=0` 直接让用户看到"还是很多运行中")。动手前先花 10 秒从源码确认枚举,别照抄任何现成脚本里的字面值。
 - 不用重启容器(面板按请求读库)。
 - **没有宿主机 ssh 时的修复路径(2026-10-02 实测通过)**: 用 `/api/scripts` POST 写一个修复脚本到 `/ql/data/scripts/`,脚本自己 `sqlite3.connect("/ql/data/db/database.sqlite")`、**逐行用 `os.path.exists("/proc/<pid>")` 在容器内验活**(别信面板的 pid 字段),先 `shutil.copy2` 备份 DB 到 `/ql/data/db/full_backup_<ts>.db`,再只对 `alive=False` 的行 `UPDATE Crontabs SET status=0,pid=NULL` → 建临时 cron 任务(占位 schedule)`命令=python3 /ql/data/scripts/_fix.py` → `PUT /api/crons/run` → 日志读 `log/python3/<时间戳>.log`。
 - 日志目录名 = **命令行的第一个词**(`python3 /ql/data/scripts/_fix.py` → 日志落在 `log/python3/`;`task xxx.js` → 落在 `log/<仓库名>_<脚本名>/`),按这个找目录。
@@ -469,4 +484,4 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - `references/passwall-proxy-diagnosis.md` — 判断容器流量是否真走代理(国内外 IP 回显对比)+ PassWall 域名强制直连步骤(京东风控根因排查用)
 - `references/yyb-go-wechat-login.md` — YYB-Go(微信登录)部署 + 阿维塔/捷停车签到两案例:风控110000根因(绑错微信)、JWT字段漂移、config.json子目录隔离、静默失败调试法(2026-08-31)
 - `references/security-audit.md` — 青龙安全审计三步法(版本/暴露/入侵痕迹) + 2.20.2 红线含义 + 重装保数据事实 + 本机基线(2026-09-01)
-- `scripts/ql_stale_status.py` — 「运行中」残留体检/复位(无需宿主机 ssh): 列出 status≠0/pid 非空的行,`--fix` 则在容器内逐行 `/proc/<pid>` 验活、备份 DB、只复位进程已不存在的行,并打出后续必做项(硬刷页面/删临时任务)
+- `scripts/ql_stale_status.py` — 「运行中」残留体检/复位(无需宿主机 ssh): 列出 `pid` 非空或 `status=0`(运行中)的行,`--fix` 则在容器内逐行 `/proc/<pid>` 验活、备份 DB、把"进程已不存在"的行复位成 `status=1`(该任务启用)/`2`(该任务停用)+`pid=NULL`,并打出后续必做项(硬刷页面/删临时任务)
