@@ -66,6 +66,12 @@ pgrep -af "sing-box|xray|chinadns"        # 核心进程在跑
 这次 `opkg install` 期间 SSH **没断**(全程 exit 0),restart 那条也没断 —— 断线是"可能"不是"必然",
 但仍按 nohup 后台 + 重连查 log 走,别在前台等。本次无 `resolve_conffiles` 提示(用户改过的规则文件未被 replan)。
 
+第三轮实测(26.9.27 → 26.10.1,2026-10-01):资产名与 size 规律仍一致(843133/18001 字节,
+tag `26.10.1-1`);ipk `Depends` 仍是那 19 项硬依赖,逐项 `opkg list-installed` 复核全部 OK;
+`opkg install` 与 `/etc/init.d/passwall restart` 两条命令 SSH **都没断**(restart rc=0),
+再证"断线是可能不是必然"。升级前后 `/etc/config/passwall` md5 完全一致(内容未被 replan)、无 `resolve_conffiles`。
+验证:sing-box + chinadns-ng 换新 PID 在跑、google/youtube/baidu 均 200、`luci.js=200`。
+
 ## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
 
 升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
