@@ -124,6 +124,26 @@ iStoreOS 厂商硬锁(hold)的包 = 只能整固件升级,别强拆:
 升级后验证:`/etc/init.d/uhttpd restart` → `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/luci.js`
 应 200(`/cgi-bin/luci` 返 403 是 iStoreOS 登录门,正常)→ passwall 进程在跑 + `google=200`。
 
+第三轮实测(2026-10-03,26.270 → **26.275**,同一天还升了 passwall 26.10.1):
+- `opkg list-upgradable` 65 行里 4 行是 `Multiple packages (...)` 提示行,`grep -v "^Multiple"` → **61 个真包**,
+  减去 6 个 held = **55 个全升成功,0 失败**。判断真实升级数仍只看 `grep -c "^Upgrading"` 日志 = 55 ✓。
+- **hold 集合会变**:同是这台机器,09-28 时 luci 家族(`luci-base`/`luci-mod-*`/`luci-compat`/`luci-app-firewall`/
+  `luci-app-upnp`/`luci-i18n-*-zh-cn`)在 604 个 hold 里、只能显式 `opkg install` 绕过;10-03 再查已经**不在 hold 里**,
+  可随 `opkg upgrade` 整体同版升级 —— 所以**不要照抄上次的"luci 被劈成两半"结论,每次都现查一遍**:
+  `awk "/^Package:/{p=\$2} /^Status:.*hold/{print p}" /usr/lib/opkg/status` 存成 hold.txt,再
+  `awk "NR==FNR{h[\$1];next} (\$1 in h){print \$1}" hold.txt upgradable.txt` 求交集。
+- 这次被 hold 且可更新的只剩 6 个:`base-files`(61~2026073111 → 1674~…,固件自建版,别动)、
+  `libopenssl3`/`openssl-util`/`libopenssl-legacy`/`libopenssl-conf`、`libmbedtls21`。全部按规则跳过。
+- 本轮唯一 `Collected errors` = `resolve_conffiles: Existing conffile /etc/config/luci is different …
+  new conffile will be placed at /etc/config/luci-opkg`(**正常**,用户的 /etc/config/luci 保留)。
+- 其他一并升级:`liblzma`/`xz`/`xz-utils` 5.6.2→5.8.3、`zoneinfo-core`/`zoneinfo-asia` 2026b→2026d。
+- 升完 `/etc/init.d/rpcd restart; /etc/init.d/uhttpd restart`,再验:`luci.js=200`、
+  `ubus -v list luci | grep -c getMountPoints` = 1、`ubus call luci getMountPoints "{}"` 返回真实挂载表、
+  `find /www/luci-static /usr/share/luci /usr/share/rpcd /etc/init.d -type f ! -perm -044` 为空、
+  sing-box/chinadns-ng 在跑 + `google=200`/`baidu=200`。
+- 该机 passwall 26.10.1 的菜单是**经典 Lua 控制器** `/usr/lib/lua/luci/controller/passwall.lua`,
+  不在 `/usr/share/luci/menu.d/`(只有 acl.d/luci-app-passwall.json)—— 别照着没有 menu.d 文件就判断安装残了。
+
 ### ⚠️ 只升一半会把面板弄挂:前后端 API 错位(2026-09-28 踩)
 
 症状:面板某页报 `RPCError: RPC call to luci/getMountPoints failed with error -32000: Object not found`。
@@ -237,6 +257,11 @@ asyncio.run(main())
   `/etc/init.d/openbox`、`openbox-panel` 是 700 → 用户点开 Open-Box 页就报
   `HTTP error 403 while loading class file .../openbox/status.js`。
   修完 `curl -o /dev/null -w "%{http_code}" http://127.0.0.1/luci-static/resources/view/openbox/status.js` 应 200。
+- ⚠️ **新版 Open-Box 把前端改名了**(2026-10-03 实测):`/www/luci-static/resources/view/openbox/` 里
+  只剩 `main.js`(113 KB),旧的 `status.js` 已不存在 → 照老 URL 探测会拿到 **404**,那是改名不是权限复发。
+  判断前先 `ls -la /www/luci-static/resources/view/openbox/` 看真实文件名,并 `cat /usr/share/luci/menu.d/luci-app-openbox.json`
+  确认菜单 `action.path`(应为 `openbox/main`)。该机 Open-Box 会**自己更新**(19:03 整套文件时间戳刷新,
+  `crontab -l` 里没有对应任务),所以每次排查先看时间戳再下结论。
 - **一次扫干净所有权限坑**(比背文件清单靠谱):
   `find /www/luci-static /usr/share/luci /usr/share/rpcd /etc/init.d -type f ! -perm -044`
   (输出为空才算干净;修完再跑一遍复核)。
