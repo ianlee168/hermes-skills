@@ -8,12 +8,12 @@ tags: [docker, scheduling, qinglong]
 
 青龙面板是一个定时任务管理平台，常用于签到、监控、自动化脚本。
 
-## 协作约定(2026-10-03 陛定)
+## 协作约定(2026-10-03 用户定)
 
 - **面板的写操作只归一条会话/实例**(当前: 110妹@50.110 主会话);其它会话(同机其它聊天窗口、161姐@50.161)**只读**。理由: 已有两次真实冲突——A 会话把 `status` 写成 0(=running) 想修"运行中"反而复现症状, B 会话同时按枚举改成 1/2;且双方反复手动触发 JD 任务(不在计划时间的 16:34/16:49/17:02/22:42 四次)直接把账号送进风控敏感窗口。
-- 接手前先 `sqlite3 ... "select id,name,status,pid,isDisabled from Crontabs where pd IS NOT NULL"` + 看 `RunningInstances` 最近行, 判断有无别人正在改造; 发现别的会话在动 → **停手报告陛下**, 不要并行改。
-- 手动触发任何需要“拿账号去换凭证”的任务(jd_wskey/jd_wsck/签换类)先问陛下——这类任务多跑几次就可能被风控误判并把 cookie 自动禁用。
-- 单一写者声明已落在面板目录: 宿主机 `/mnt/user/appdata/qinglong/OWNER.md`(容器内 `/ql/data/OWNER.md`)。**动手前先读它**;owner 不是自己 → 只读诊断 + 把「要改什么/证据/回滚方案」报给陛下。
+- 接手前先 `sqlite3 ... "select id,name,status,pid,isDisabled from Crontabs where pd IS NOT NULL"` + 看 `RunningInstances` 最近行, 判断有无别人正在改造; 发现别的会话在动 → **停手报告用户**, 不要并行改。
+- 手动触发任何需要“拿账号去换凭证”的任务(jd_wskey/jd_wsck/签换类)先问用户——这类任务多跑几次就可能被风控误判并把 cookie 自动禁用。
+- 单一写者声明已落在面板目录: 宿主机 `/mnt/user/appdata/qinglong/OWNER.md`(容器内 `/ql/data/OWNER.md`)。**动手前先读它**;owner 不是自己 → 只读诊断 + 把「要改什么/证据/回滚方案」报给用户。
 - 定位“这是谁改的”: 先看产物 mtime → `session_search` 自己的会话(**同机其它聊天窗口也算“自己”**,别一口咬定是另一台机器的分身) → 再查另一台机的 cron/session 存储(cron 常驻看 `~/.hermes/cron/`)。别凭印象归因。
 
 ## 用户环境
@@ -125,7 +125,7 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 
 任务日志中间出现 `403 (Forbidden)`/`Response code 403`/`领取次数不足`/`火爆了跳出` **不代表故障** — 脚本在遍历子任务(签到/浏览/领奖),重复领取已领完的奖励被拒是正常流程,会继续跑下一个。唯一判据是**结尾行**:`## 完成 ✅` = 正常(中间有多少失败行都忽略);`## 失败 ❌(退出码 N)` = 真问题才查。扫日志先 `grep -E "完成 ✅|失败 ❌"` 定位结尾,再决定要不要看中间。
 
-同一任务的日志时间戳早于 cookie 恢复时刻 = 风控期残留,别拿旧日志当现状(先 `ls -t` 确认最新一份再判读)。判读前先跑 `date` 确认真实当前日期——会话可能跨天,按记忆里的"今天"推理会把旧日志当现场故障。
+同一任务的日志时间戳早于 cookie 恢复时刻 = 风控期残留,别拿旧日志当现状(先 `ls -t` 确认最新一份再判读)。判读前先跑 `date` 确认真实当前日期——会话可能跨天,按记忆里的"今天"推理会把旧日志当现场故障。**三处对表**: 本机 `date` + 容器 `docker exec qinglong date` + 任一外部 HTTP `Date` 头(api.github.com / baidu)。面板日志文件名看起来"比今天还新"时,多半是**你的会话记忆过期**(机器关机跨了天),不是时钟错;判"冷却 24-48h 够没够"、"今天到底跑没跑"之前先做这一步。
 
 **占位 schedule 的任务不会自动跑**: `29 2 29 2 *`(2月29日)这类"不存在日期"的 cron 是作者留的占位,日志只可能来自手动/全量 run——这类任务的报错不影响日常,用户翻到旧日志问起时按此解释,别当故障追。
 
@@ -135,11 +135,11 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 |------|------|------|
 | 任务 1-2s 秒退,日志尾 `MODULE_NOT_FOUND / Cannot find module 'qs'` | 容器重建后 npm 依赖没装(青龙依赖管理安装全失败,registry 不通) | 进容器补装:`docker exec qinglong sh -c 'cd /ql/data/scripts && pnpm add got tough-cookie crypto-js https-proxy-agent big-integer axios png-js dotenv jsdom qs request tunnel redis global-agent ws form-data --registry=https://registry.npmmirror.com'`(faker3 常用包全集;国内必须 npmmirror;canvas 原生包可后补) |
 | 脚本能跑但「共0个京东账号Cookie」 | JD_COOKIE 环境变量被禁用(status=1) | `PUT /api/envs/enable` body=["id串"] 启用;验证 `GET /api/envs` 看 status=0 |
-| CK检测日志账号「已失效」 | **先分层查原因**(多端登录互顶 / 风控标记 / 30天到期)——别默认是过期 | 用 jdpro CheckCK 同款接口验真伪:带 mobile UA + Referer 探 `me-api.jd.com/user_new/info/GetJDUserInfoUnion`,返回 `{"msg":"not login","retcode":"1001"}` = 真失效(passport 302 跳登录页可作旁证,`uc/loginService` 恒 200 不算探测);确认后浏览器 F12 抓 pt_key/pt_pin 重填(第三方扫码工具已全挂,别推荐) |
+| CK检测日志账号「已失效」 | **先分层查原因**(多端登录互顶 / 风控标记 / 30天到期)——别默认是过期 | 用 jdpro CheckCK 同款接口验真伪:带 mobile UA + Referer 探 `me-api.jd.com/user_new/info/GetJDUserInfoUnion`,返回 `{"msg":"not login","retcode":"1001"}` = 真失效(passport 302 跳登录页可作旁证,`uc/loginService` 恒 200 不算探测);确认后浏览器 F12 抓 pt_key/pt_pin 重填(第三方扫码工具已全挂,别推荐)。⚠️ **`1001` 只在有「已知可用的对照」时才可信**: 同一批请求里把一条确认能用的 CK 用同款探针再打一遍 —— 若**它**也返回 `1001`(或端点整片 `403`),说明是**探针本身被挡**(本机 IP/UA 被京东拒),此时不能据此判定任何账号失效,更不要在汇报里写"账号死了";唯一地面真值是该仓库自己的 CK检测/资产统计任务日志 |
 | API 列表一堆「运行中」但容器内无进程 | pid 残留(失败任务状态没清),并非真在跑 | `docker exec qinglong ps aux` 确认真实进程;依赖修好后状态自愈 |
 | CK检测报 `connect ECONNREFUSED 127.0.0.1:5600` | 脚本写死旧端口,青龙容器内部是 5700 | 不影响检测主流程(退回普通检测逻辑),已知搁置 |
 
-判断「cookie 是不是真到期 / 到底哪天抓的」(用户问"这么快就 30 天了吗")：别信 Envs 表 createdAt/updatedAt — createdAt 是最初建记录的时间,updatedAt 会被**每次禁用/启用操作覆盖**(CK 检测自动禁用也会写 updatedAt),都不是抓取时间。看该仓库 CheckCK 的日志目录(`/ql/data/log/<repo>_jd_CheckCK/`,只存最近几次运行)里最后一次「状态正常」的日志日期,按 30 天期推算即可解释。另:jdpro CK 检测默认**只禁用不自动启用**——需 env `CHECKCK_CKAUTOENABLE='true'` 才会自动启用新 cookie,否则到期后必须人工重抓填回再 enable,任务会一直停着等。
+判断「cookie 是不是真到期 / 到底哪天抓的」(用户问"这么快就 30 天了吗")：别信 Envs 表 createdAt/updatedAt — createdAt 是最初建记录的时间,updatedAt 会被**每次禁用/启用操作覆盖**(CK 检测自动禁用也会写 updatedAt),都不是抓取时间(且本版 `/api/envs` 干脆不返回这两个字段 → **无法从面板判断用户最后一次贴凭证的时间**;想判断"用户是不是重新抓过"只能把当前值与上次存下的副本对比,或直接问用户,别猜、别编一个日期)。看该仓库 CheckCK 的日志目录(`/ql/data/log/<repo>_jd_CheckCK/`,只存最近几次运行)里最后一次「状态正常」的日志日期,按 30 天期推算即可解释。另:jdpro CK 检测默认**只禁用不自动启用**——需 env `CHECKCK_CKAUTOENABLE='true'` 才会自动启用新 cookie,否则到期后必须人工重抓填回再 enable,任务会一直停着等。
 
 ### cookie 失效原因分层(先定性,再决定要不要让用户重抓)
 
@@ -252,9 +252,18 @@ faker3(shufflewzc/faker3) 更新变慢后, 社区主流转向 **6dylan6/jdpro**(
 - 验证迁移成功: 跑 jdpro 的 jd_CheckCK, 三账号"状态正常"即通
 - faker3 独有任务 jdpro 无对应(资产统计/一键价保/删券/晒单/试用/路飞账密/github拉库修复等) — 清理前逐项核对:独有项几乎全是**过期限时活动**(大牌04xx~06xx、生肖金币等),仅少数通用项(试用/删券/查IP)有保留价值;列清单问用户再删,勿一刀切
 
-## 订阅管理:老版无订阅 API → 直改 sqlite
+## 订阅管理(2.22 有 API;更老版本才只能直改 sqlite)
 
-老版青龙没有 /api/subscribes 路由(请求回 SPA HTML / 404),订阅的增删改查只能直改数据库:
+**2.22 实测有完整 API**(2026-10-04):
+
+| 操作 | 端点 | 形状 / 坑 |
+|------|------|-----------|
+| 列出订阅 | `GET /api/subscriptions` | 返回 `data[]`,字段 `url/schedule/whitelist/blacklist/log_path/autoAddCron/autoDelCron` |
+| **立即拉取** | `PUT /api/subscriptions/run` | body 是**数组** `[7]` → 200;实测 14 秒跑完,日志写进该订阅自己的 `log_path` |
+| 改订阅 | `PUT /api/subscriptions` | 单对象,但 **`autoAddCron`/`autoDelCron` 必须是布尔值**:库里存的是 1,原样 PUT 回必 400 `"autoAddCron" must be a boolean`(三种形状都试过)→ body 里改成 `true` 才过 |
+| 直改库(兜底) | `Subscriptions` 表 | **改完不需要重启容器**:实测改 `url` 后下一次拉取立刻用新值(与老版「必须 docker restart」的结论相反) |
+
+老版本青龙(没有 /api/subscribes 路由,请求回 SPA HTML / 404)仍只能直改数据库:
 
 - 库:容器内 `/ql/data/db/database.sqlite`,表 `Subscriptions` — 字段是 snake_case:`is_disabled`(不是 isDisabled)、`schedule`、`schedule_type`='crontab'、`autoAddCron`/`autoDelCron`
 - 停用/启用:`UPDATE Subscriptions SET is_disabled=1 WHERE id=N`(1=停,0=启)
@@ -277,6 +286,14 @@ faker3(shufflewzc/faker3) 更新变慢后, 社区主流转向 **6dylan6/jdpro**(
 - 订阅只刷新本地脚本,**任务执行时才读脚本** → 拉库频率只决定拿上游修复的滞后时间,≠ 任务执行频率
 - 日更仓库 1-2 次/天足够(`30 1,13 * * *` 凌晨+午后),更新慢的 1 次/天;5 次/天徒耗 GitHub 匿名配额,易触发限流
 - 订阅带 autoAddCron=1 时上游每加脚本自动建任务且**默认启用** → 已废弃仓库的订阅不删,上游一更新就和主力仓库双跑;更要紧的是**它会把用户手动停用的任务重新启用**(实测: 手动停用的 55 条任务在当日 01:30 拉库后又跑起来)。要"长效停用"必须三选一并在动手前告知取舍: 关该订阅的 `autoAddCron` / 把计划改成远期占位(如 `0 0 1 1 *`) / 停用订阅本身。
+- **拉库日志是独立命名空间,别当成"账号任务跑过了"**: `GET /api/logs` 里 `<仓库名>/<时间戳>.log`(如 `6dylan6_jdpro/…`)是**订阅拉取任务自己**的日志。报 `fatal: could not read Username for 'https://<host>'` = 拉取源现在要账号密码(第三方加速域挂了/转私有)→ 脚本库**冻住**: 本地那份仍能照跑,但拿不到上游修复。先换源/修源再谈跑脚本;也别把这类日志当作今天 JD 任务执行过的证据。
+
+### 6dylan6/jdpro 的公开上游已死 → 换 gitclone 镜像 (2026-10-04 实测)
+
+- 上游 `github.com/6dylan6/jdpro` 现在直接 **401**(转私有/下架),所以一切以它为上游的加速域都报 `fatal: could not read Username for 'https://<host>': No such device or address`(git 想弹账号密码但无 TTY)。实测挂掉的一串: 原配置 `js.googo.win`、`ghproxy.net`、`gh-proxy.com`、`hub.gitmirror.com`;`ghfast.top` 另报 `remote: Please upgrade your git client.`
+- **可用镜像**: `https://gitclone.com/github.com/6dylan6/jdpro.git` —— 容器内实测 14 秒克隆成功,HEAD `fa191ffb`(2026-09-17),71 项文件,`jd_wskey.py` md5 `4db416a28f` **与本地面包逐文件相同** → 换源不会降级;代价是内容冻结在 09-17(上游私有后不会有新修复)
+- 换源步骤(可一键回滚,留好旧 URL): 改 `Subscriptions.url` → `PUT /api/subscriptions/run [<订阅id>]` → 读该订阅日志见「拉取 <alias> 成功...」+ `/ql/data/repo/<alias>` 目录出现 → 复核 `/ql/data/scripts/<alias>` 文件数/关键脚本 md5 未变
+- **路径关系**: 拉取目标 `/ql/data/repo/<alias>` **只在成功拉取过之后才存在**(一直失败就一直缺);脚本真实运行目录是 `/ql/data/scripts/<alias>`;订阅 autoAddCron 建出来的任务行都带 `sub_id=<订阅id>`(查「这批任务是谁建的」看这个字段)
 
 ### 整仓库退役清理(遵守删除红线:先备份、可撤销)
 
@@ -347,6 +364,10 @@ jd_wskey.py 的 `appjmp()` 有两条失败分支,含义完全不同:
 | `pt_pin=X;疑似IP风控等问题 默认为失效` | genToken 接口返回 `tokenKey=xxx`(接口拒了这次请求,通常是**同 IP 请求太密/风控**)→ **脚本默认判失效,但是假阳性** |
 
 验证法:把 `jd_wskey.py` 的 `ttotp..appjmp` 函数段切出来单独跑一次(用 `/api/scripts/detail?file=6dylan6_jdpro/jd_wskey.py` 拿全文 → 切出这几个 def → prepend imports+logger+`WSKEY_UPDATE_BOOL=False` → `exec` 后在内存里对每个 pin 调 `getToken()`,**只打印成功/fake,不打印 key 本体**),看命中哪条分支。实测同一批账号:一个返回 fake(真死)、另一个返回 `tokenKey=xxx`(只是接口被拒),而后者对应的 JD_COOKIE **当时仍然活着** —— 所以拿到“疑似IP风控”不能断定 wskey 死了,更不能立刻重试。
+
+**失败分支的日志字样对照**(2026-10-04 实测真失效那一支): `pt_pin=X;状态失效` + `pt_pin=X;WsKey状态失效` + `账号禁用/账号禁用成功`,随后 `WSKEY转换` 段打印 `账号: pt_pin=X; WsKey疑似失效, 已禁用Cookie` 并 `tg 推送成功` → 这串连出来才是**真失效**(appjmp 给了 fake key);注意此时面板 Envs 状态可能并未变(脚本的“禁用”有时只作用于 cookie 匹配,复核 `GET /api/envs` 才算数)。
+
+**外网探针与地面真值同向的一次**: 2026-10-04 从本机探 `me-api` 三条 CK 全 `1001`,随后面板 CK检测(2286)独立判「三条全失效」并自动禁用 —— 说明这次 `1001` 不是被挡;而同一批用 `wq.jd.com/user/info/QueryJDUserInfo?sceneval=2` 探是整片 `403`(该端点对本机 IP 不可用,别拿它判账号死活)。
 
 配套铁律: **同一天不要连跑多次 wskey 转换**(实测 16:34/16:49/17:02/22:42 跑 4 次后,原本能换出真 key 的两个账号当晚就被京东作废,且接口开始返回 xxx)。要重试先等 24-48h。另: 未实名账号的 wskey 比已实名的脆弱得多(同批 3 账号里未实名那 2 个先死)。
 
