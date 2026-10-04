@@ -472,6 +472,17 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - 现成脚本: `scripts/ql_stale_status.py`(纯 stdlib,`--check` 列残留 / `--fix` 自动部署修复脚本 + 跑临时任务 + 复核)。
 - 复核必须走 API 而不是只看库: `GET /api/crons` 的返回形状是 **`data.data[]` + `data.total`**(不是 data 直接为数组);看用户点名任务的 `pid` 是否 null、`status` 是否 0。
 
+## 「运行中」残留的真根因:令牌每日漂移 + 自愈任务 (2026-10-04 实测)
+
+清完 `RunningInstances` 第二天又长出来时,别只怪“面板重启”——根因是: **面板每天 08:00 自换内部 system 令牌**(判据: `Apps.id=1 name=system` 的 `updatedAt` = 当天 `00:00:01 UTC` = 北京 08:00;`token.json` 的 `expiration` = 生成时刻 **+30 天**),但磁盘上的 `/ql/data/config/token.json` **不跟着更新** → 当天 08:00 之后每一个跑完的任务,结束回调 `PUT /open/crons/status` 全部 **401 且静默** → 每个完成的任务留一行 `status=1` 的假「运行中」。
+
+- **判令牌死活别看 expiration 字段**(实测文件里 expiration 还写着 11-02,认证却已 401)——唯一判据是**拿它打一次**:`TOK=$(python3 -c "import json;print(json.load(open('/ql/data/config/token.json'))['value'])")` → `curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $TOK" http://127.0.0.1:5700/open/crons` → **200 活 / 401 已漂移**。
+- 令牌是**不透明 36 字符串**(不是 JWT,段数=1),别按 JWT 去解 payload。
+- **修**: 跑面板自带生成器 `node /ql/static/build/token.js`(它用 `{value,expiration}` 覆写 token.json;`require` 是 file-relative,任意 cwd 都能跑)→ 再探应 200;验写入权限用伪 id `PUT /open/crons/status` 得 **400**(鉴权已过)而不是 401。
+- **自愈任务**(已建,id 会变、按名字找): 名字「令牌同步(修运行中残留)」、命令 `node /ql/static/build/token.js`、排期 `5 8 * * *`(面板 08:00 换令牌后 5 分钟)。新建的形状: `POST /api/crons` 单对象 `{"name":..,"command":..,"schedule":..}`。
+- **必须造真故障测**(用户明令): 备份 `token.json` → 写一个 36 字符假值进去 → 探 `GET /open/crons` 应 **401** → `PUT /api/crons/run ["<id>"]` → 25 秒后再探应回 **200**(实测任务 1 秒跑完)。只“建了任务没测”不算完成。
+- **残留复位的正确字面值**: `RunningInstances` 里 `status=1` 才是「运行中」,**已结束是 `status=3`**(`exit_code` 0=成功 / 1、3=失败;2=未知)→ 清残留写 `UPDATE RunningInstances SET status=3, exit_code=0, finished_at=<now>`;`Crontabs` 侧同前(启用→1、停用→2、`pid=NULL`)。
+
 ## YYB-Go 账号失效 → 分享版脚本集体挂 (2026-10-02 实测)
 
 症状: 阿维塔 + 捷停车 同时失败,脚本日志 `HTTP Error 502: Bad Gateway`(请求 `/wxapp/getCode`)。
