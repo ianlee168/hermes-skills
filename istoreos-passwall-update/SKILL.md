@@ -72,6 +72,13 @@ tag `26.10.1-1`);ipk `Depends` 仍是那 19 项硬依赖,逐项 `opkg list-insta
 再证"断线是可能不是必然"。升级前后 `/etc/config/passwall` md5 完全一致(内容未被 replan)、无 `resolve_conffiles`。
 验证:sing-box + chinadns-ng 换新 PID 在跑、google/youtube/baidu 均 200、`luci.js=200`。
 
+第四轮实测(26.10.1 → 26.10.4,2026-10-05):流程与前三轮完全一致(846995/18016 字节,tag `26.10.4-1`,
+依赖齐、备份 md5 与升级后一致、SSH 未断、三件套全绿)。
+- 上游发版很密(26.9.27 → 26.10.1 → 26.10.3 → 26.10.4,几乎一天一版):**每次都先查 GitHub API 的确切 tag/资产名再下载**,
+  别把上一次的版本号当结论照护。
+- 新观察:`opkg install` 日志会出现 `Removing obsolete file /usr/share/passwall/helper_smartdns.sh.` ——
+  这是新包 control 里声明的 obsolete 清理,**正常**,不是它删了用户的东西。
+
 ## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
 
 升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
