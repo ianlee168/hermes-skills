@@ -69,7 +69,7 @@ services:
 - 成功标志: 日志 `状态转换: ... → LOGGED_IN` + `登录成功` + `[DAILY-CHECK-IN] 每日签到完成`
 - 锁定期内**任何**登录尝试都会延长锁定,明确告诉用户"等 N 分钟别动"
 
-## 新故障模式(2026-10-06 起实测): FIDO/passkey 拦截 → “应用活动被跳过” → 签到消失
+## 故障模式: FIDO/passkey 拦截 → “应用活动被跳过” → 签到消失
 
 **症状**: 日报连着几天 `❌ 未见签到记录`,但余额仍在小幅上涨(+60~200/天),看着像“半好”。
 
@@ -85,7 +85,23 @@ services:
 **处置(让用户选)**: ① 在 account.microsoft.com → 安全性 → 高级安全选项里**删除 passkey / 关闭无密码账户**(回到密码流,签到即恢复;代价=用户自己也不能用 passkey 登录); ② 保留 passkey ⇒ 自动签到基本无解(只能等上游支持或放弃)。
 
 ⚠️ 同期的独立问题: DESKTOP 密码登录可能报 `此密码不是你的 Microsoft 帐户的正确密码`(密码被改 / 账号已被强制无密码化)。改 `.env` 后必须 `docker compose up -d --force-recreate`;连续错密码会被锁 → 确认密码前别反复试,必要时**先停容器**(cron 07:00 会再撞)。
-⚠️ 日报脚本的判定式: 最近 24h 内 grep `每日签到完成.*pointsGained=[1-9]` → 不匹配就报 ❌。所以“签了但 0 分”也会显示 ❌;遇到 ❌ 必须回原始日志区分“真没跑”还是“跑了 0 分”。
+### 实测正向修复路径(2026-10-07,一次成功)
+
+1. **入口别找错**: 通行密钥列表在 **`https://account.live.com/proofs/manage`**(高级安全选项) —— 用户去过的 `/proofs/manage/**additional**` 是“**添加**登录方式”页,永远看不到列表。页面上它叫 **「使用密钥」**(不是 passkey),会写明保存位置(本例 `Google Password Manager`);旁边另有「无密码帐户」「双重验证」开关。
+2. **同一天很可能两件都发生了**: 本例密码行显示`上次更改时间 2026/10/6`,与签到断掉同天 —— 所以**删通行密钥 + 更新容器密码两件都要做**,只做一件仍不完整。
+3. 删掉通行密钥后,登录会短暂被推到 `account.live.com/interrupt/passkey/enroll`(微软继续建议注册通行密钥)—— 脚本有 `PASSKEY_ERROR` 处理,**实测 1 秒后自己落到 cn.bing.com**,不必因此再建通行密钥。
+4. **更新容器密码的“不进聊天”流程(实测可用)**: 让用户把新密码存到本机一个 txt → 助手读文件、同时取回 `.env`、只替换 `ACCOUNT_1_PASSWORD=` 行(保留其它行) → `scp` 到 `…/app/.env.new` → NAS 上 `cp -n .env .env.bak-<ts>` 备份后 `cat .env.new > .env` → **sha256 对比“NAS 文件内密码串”与本地值**(只打哈希前缀,永不打明文) → `cd /mnt/user/appdata/microsoft-rewards/app && docker compose up -d --force-recreate` → `docker exec … sh -c 'printf %s "$ACCOUNT_1_PASSWORD" | sha256sum'` 再比一次。
+5. **验证看这三行**: `[LOGIN-BING] 在Bing页面: true (cn.bing.com/)` → `[LOGIN-APP] 移动访问令牌已接收` → `[DAILY-CHECK-IN] 每日签到完成`(签到在 RUN-START 后约 2 分钟,不用等整轮跑完)。
+
+**用户问“怎么改那个 .env”时的实测环境结论(50.1)**: appdata 共享是 `shareExport="-"`(未导出 SMB)⇒ `\\192.168.50.1\appdata\…` 必然 Permission denied;已导出的只有 Movie01/TV03/flash/**NAS**。GUI 侧装了 `compose.manager`(但本栈未注册)与 `dynamix.*`,但**没有** Dynamix File Manager、也**没有** Web Terminal ⇒ 最省事的是“本机 txt + 助手代写”(见上),其次才是装 Dynamix File Manager / 临时开 appdata 的 SMB 导出 / 利用已导出的 NAS 共享中转。
+
+⚠️ 日报脚本的判定式(别丢): 最近 24h 内 grep `每日签到完成.*pointsGained=[1-9]` → 不匹配就报 ❌。所以“签了但 0 分”也会显示 ❌;遇到 ❌ 必须回原始日志区分“真没跑”还是“跑了 0 分”。另: 容器重建会立即跑一轮(RUN_ON_START),所以改完配置**不用等明早 07:00**就能验证。
+
+**日报只是提示,判定回原始日志**: 容器一趟完整运行要 **200~280 分钟**(07:1x 起跑、到 10:40~11:00 才 RUN-END),而日报 cron 是 **08:00** —— 那时当天那轮还没跑完,日报看到的是“上一个完整周期的日志 + 当前未完成轮”。所以日报里的余额往往落后于当天最终值、❌/✅ 也不能当“今天最后结论”。要定论就把 `RUN-START / LOGIN-BING / DAILY-CHECK-IN / RUN-END` 按时间线拉出来看。
+
+**修完怎么当场验证(不用等次日 07:00)**: 改完安全设置 → `cd /mnt/user/appdata/microsoft-rewards/app && docker compose up -d --force-recreate`(或 `docker restart microsoft-rewards-script`)—— 容器启动即 **RUN_ON_START** 跑一轮;等 5~10 分钟看日志里 `[LOGIN-BING] 在Bing页面: true` 与 `[DAILY-CHECK-IN] 每日签到完成` 是否回来。
+
+**用户会把 passkey 和密码管理器混为一谈**(会直接问“passkey 是 Google Password Manager 这个吗”): passkey 是**凭证**,Google 密码管理工具 / Windows Hello / iCloud 钥匙串只是**存放处**;微软安全页的“通行密钥”列表会标出来源,删哪一条都行。想确认本地那把: `chrome://settings/passkeys` —— 但真实 profile 被运行中的 Chrome 锁住,**先请用户完全退出浏览器(别自己关)**,或直接让用户自己看一眼更快。
 
 ## 日志判读
 
