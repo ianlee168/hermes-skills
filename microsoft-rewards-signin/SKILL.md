@@ -59,6 +59,25 @@ services:
   `serpbotscore` 再决定要不要加。CN 区账号搜索分可能明显低于美区,以实测为准。
 - 回退:取 `docker-compose.override.yml.bak-*` 覆盖后 `docker compose up -d`。
 
+## 查“兑换按钮为什么是灰的”/“我的市场在哪”——不用密码，复用容器会话 (2026-10-07 实测)
+
+容器把登录态存在 `sessions/sessions.db`(表 `sessions(email,platform,storage_state,fingerprint,updated_at)`)。宿主机有 `sqlite3`、容器有 **node v24(自带 `node:sqlite` + 全局 fetch)** → 写个 node 脚本在**容器内**跑:读 `storage_state` 里的 cookies → 带 cookie fetch `https://rewards.bing.com/redeem/<市场>` → HTML 去标签后看关键行。
+
+- 脚本进去的办法: scp 到宿主机 `…/microsoft-rewards/app/sessions/`(该目录挂到容器 `/usr/src/microsoft-rewards-script/sessions/`) → `docker exec microsoft-rewards-script node /usr/src/microsoft-rewards-script/sessions/x.js`
+- 网页 HTML 可用;但 `rewards.bing.com/api/...` 与 `prod.rewardsplatform.microsoft.com/dapi/...` 直接 fetch 会 **401**(要防伪令牌) → 别在这上面浪费时间
+- 探针用完删掉(删除红线,先问用户)
+
+### Rewards 市场锁在“初始国家/地区”,当前 IP/VPN/地区设置都不参与判定
+
+页面原文: **“你正在预览在你的初始国家/地区以外的目录。你可以查看物品，但无法兑换。”**
+
+- **实测(2026-10-07)**: 用户把账号地区由土耳其→中国后,中国区与土耳其区目录**都**带这句预览提示;从**中国 IP**(NAS 容器出口=北京联通)看中国区目录也照样提示 ⇒ 判定与**当前 IP 无关**,只看账号的**初始**国家/地区。扫 14 个市场,只有 **韩国区**没这句 → 他的市场一直是韩国(极可能是当初用韩国 VPN 注册/加入 Rewards 时定下的)。
+- 判定“我的市场是哪个”的可靠办法 = 逐市场 fetch `/redeem/<mkt>`(us/gb/ca/au/jp/hk/sg/kr/in/tw/de/fr/br/my…),看**哪一页没有该预览提示**。
+- 给用户的结论必须写清: 非本国市场的一切(包括各类抽奖)永远只能“预览”, **改地区/关VPN/清cookie/换窗口/无痕都没用**; 想迁移只能找 Rewards 客服(不保证成功)。
+- ⚠️ 别用 VPN/改地区“装成”其他国家去兑换: 微软可能清空积分甚至封号,且按“初始”判定装了也无效。
+- 顺手把**本国市场能兑什么**列给用户(实测韩国区: 컬처랜드 상품권 4,595 分 / Overwatch 金币 4,800 / Sea of Thieves 1,500 / Roblox 卡 13,200 / **Total Prize Drop 抽奖入场 0 分免费**)。注意各自市场的硬门槛: 韩国区实物/礼品券通常要韩国手机号/地址验证,游戏内代码类最容易拿。
+- 附: 容器赚分用的 `ACCOUNT_1_GEO_LOCALE`(本例 CN)与账号真实市场(韩国)不一致不影响余额,只影响每天能领到的活动/连续任务;要改成与市场一致需重建容器并观察 1-2 天。
+
 ## 登录失败排查(最常踩)
 
 - **Windows PIN ≠ 账号密码**: PIN 绑设备(TPM),容器里永远无法用 PIN 登录;要真实微软网页密码,让用户浏览器 account.microsoft.com 验证/重置
@@ -102,6 +121,14 @@ services:
 **修完怎么当场验证(不用等次日 07:00)**: 改完安全设置 → `cd /mnt/user/appdata/microsoft-rewards/app && docker compose up -d --force-recreate`(或 `docker restart microsoft-rewards-script`)—— 容器启动即 **RUN_ON_START** 跑一轮;等 5~10 分钟看日志里 `[LOGIN-BING] 在Bing页面: true` 与 `[DAILY-CHECK-IN] 每日签到完成` 是否回来。
 
 **用户会把 passkey 和密码管理器混为一谈**(会直接问“passkey 是 Google Password Manager 这个吗”): passkey 是**凭证**,Google 密码管理工具 / Windows Hello / iCloud 钥匙串只是**存放处**;微软安全页的“通行密钥”列表会标出来源,删哪一条都行。想确认本地那把: `chrome://settings/passkeys` —— 但真实 profile 被运行中的 Chrome 锁住,**先请用户完全退出浏览器(别自己关)**,或直接让用户自己看一眼更快。
+
+## 兑换 / 抽奖:「立即兑换」是灰的 = 市场锁定(先按这个判,别再让用户改地区)
+
+- **症状**: 兑换页某条目灰按钮,并附一句 **「你正在预览在你的初始国家/地区以外的目录。你可以查看物品,但无法兑换。」**(英文 *previewing a catalog outside your initial country/region*)。
+- **机制**: Rewards **目录市场锁在账号的「初始国家/地区」**上;事后在 account.microsoft.com 把「国家/地区」改成中国大陆**不会**迁移 Rewards 市场 ⇒ 改完仍是“预览”。想让市场跟着变只能找 Microsoft Rewards 客服(不保证) —— 别让用户反复折腾地区(改地区本身有清积分/封号风险)。
+- ⚠️ **官方规则页里列出的参与地区 ≠ 该条目在你的目录里可兑换**: 同一份《国际月度抽奖》规则服务 ~21 个市场(含中国大陆),条目页/规则页上印着“中国”也不代表你能兑。唯一判据是页面上有没有**「预览 / 不可兑换」**字样。
+- 抽奖**按月分池**(当月报名只进当月池,不跨月结转);门槛固定 **100 分 = 1 次 / 250 = 5 次 / 500 = 25 次**。**旧月份的条目会显示“已结束/关闭”,按钮同样是灰的** —— 别把“上个月那条”误判成市场问题。
+- **先自证再下结论**: 按顺序排除 ①未登录 ②余额不足 ③条目根本不在目录里 —— 这三样都正常才轮到“市场锁定”。用**容器自己的登录会话**代查(不用问用户密码) → `references/rewards-session-probe.md`。
 
 ## 日志判读
 
