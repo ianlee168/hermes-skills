@@ -68,6 +68,67 @@ Re-running the fixed script is safe and completes the job (versions equal → "A
 `pull` + `up -d`). Timeline forensics: syslog `emhttpd: cmd: .../startScript.sh` lines + file mtimes
 (that's how the 19:00:54 and 19:04:29 runs were separated from the stale `finished/` marker dirs).
 
+## Bug 3 — Registry 429 on the pull → half-applied state (found 2026-10-08, v3.2.4→v3.3.0 case)
+
+Symptom the user sees (plugin console):
+
+```
+files updated to v3.3.0
+Image docker.io/valkey/valkey:9@sha256:c123e3715db63… Pulling
+Image docker.io/valkey/valkey:9@sha256:c123e3715db63… Interrupted
+toomanyrequests: retry-after: 1.240015ms, allowed: 44000/minute
+ERROR: docker compose pull failed - not recreating containers
+```
+
+Not a script bug — a **transient registry rate limit on BLOB downloads**, and the old single-shot
+`docker compose pull || exit 1` turned it into a half-applied upgrade (`.env`+compose on v3.3.0,
+containers on v3.2.4). Diagnose exactly like this:
+
+| Evidence | 2026-10-08 reading |
+|---|---|
+| `.env` / compose mtime | 13:02:05–06 (the run's own file edits) — newer than `docker ps` start time |
+| `docker ps --format '{{.Names}} {{.Image}}'` | `v3.2.4` — NOT what the files claim |
+| `docker images \| grep v3.3.0` | empty — no new image, the pull never landed |
+| which image aborted | the docker.io digest-pinned one (`valkey/valkey:9@sha256:c123e3…`); the GHCR immich images pull fine |
+| manifest reachability | `curl -D- -H "Authorization: Bearer $T" https://registry-1.docker.io/v2/valkey/valkey/manifests/<digest>` → **HTTP 200 + `docker-ratelimit-source: 138.2.116.181`** |
+
+Key facts:
+- Only the **blob/config download** gets 429ed (`error pulling image configuration: download failed after
+  attempts=1: toomanyrequests`); the manifest fetch is fine. So the network is NOT broken — do not go
+  chasing firewall/DNS.
+- `docker-ratelimit-source` is the egress IP. Here it is a **shared passwall proxy node**, not the
+  house's own WAN IP — that's why anonymous Hub pulls get limited so readily.
+- It is bursty, not a 6-hour lockout: `docker pull <same digest>` by hand succeeded on the **first retry**,
+  and the following `docker compose pull` completed.
+- **Digest-pinned docker.io images are invisible to name-based greps**: pulled by digest they carry
+  `RepoTags=[]` and only a `RepoDigests` entry (e.g. `immich_redis` → `valkey/valkey@sha256:70739f85…`),
+  so `docker images | grep valkey` prints NOTHING even though it is there. Look them up by container
+  image ID: `ID=$(docker inspect -f '{{.Image}}' immich_redis); docker inspect -f '{{json .RepoDigests}}' $ID`.
+  ⚠️ **Compare that digest against the compose pin** — a version bump that also bumps the valkey/postgres
+  digest means a real download is needed; if the digest matches, nothing needs pulling at all.
+- Recovery recipe (used 2026-10-08, ~6 min): `docker exec immich_postgres pg_dumpall -U postgres --clean
+  --if-exists | gzip > /root/immich-pg-backup-<ts>.sql.gz` (44M) → background
+  `docker compose pull && docker compose up -d` → verify `docker ps` shows the new tag + `/api/server/version`.
+
+### Fix applied — script v3.1 (deployed 2026-10-08): retrying pull
+
+```bash
+PULL_OK=0
+for attempt in 1 2 3 4 5; do
+    if docker compose pull; then PULL_OK=1; break; fi
+    echo "WARN: docker compose pull attempt $attempt failed, retrying in 20s..."
+    sleep 20
+done
+if [ "$PULL_OK" != 1 ]; then
+    echo "ERROR: docker compose pull failed after 5 attempts - not recreating containers"
+    exit 1
+fi
+docker compose up -d || { echo "ERROR: docker compose up -d failed"; exit 1; }
+```
+
+Sandbox-tested with a counter-based stub (`STUB_FAIL_TIMES=1` → retry succeeds, chain continues;
+`=99` → 5 WARNs, exits 1, never reaches `up -d`). Backup kept beside it as `script.bak-20261008-131520`.
+
 ## Deploy ritual (what was actually done)
 
 ```bash
