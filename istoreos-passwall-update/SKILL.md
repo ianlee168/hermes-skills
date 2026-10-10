@@ -79,6 +79,13 @@ tag `26.10.1-1`);ipk `Depends` 仍是那 19 项硬依赖,逐项 `opkg list-insta
 - 新观察:`opkg install` 日志会出现 `Removing obsolete file /usr/share/passwall/helper_smartdns.sh.` ——
   这是新包 control 里声明的 obsolete 清理,**正常**,不是它删了用户的东西。
 
+第五轮实测(26.275 → 26.278,2026-10-10):64 行 - 4 行 `Multiple` = 60 真包,与 hold 交集 **10 个** → 实升 **50**,
+依然只认真 `grep -c "^Upgrading"` 日志。
+- 本轮的 hold∩可更新 多出 **ddns-scripts 家族**(`ddns-scripts`/`-services`/`-cloudflare`/`-dnspod`,
+  2.8.2-r66 → r68,固件里是 hold)→ 又一处“hold 集合会变”的实例:同一台机器三次查询分别是 6 / 6 / 10 个。
+- busybox **没有 `comm`**(踩:写 `comm -12 <(...) <(...)` 会报 `ash: comm: not found`,还会把计数弄成假 0),
+  求交集/差集统一用 `awk "NR==FNR{h[\$1];next} (\$1 in h)" hold.txt list.txt`。
+
 ## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
 
 升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
