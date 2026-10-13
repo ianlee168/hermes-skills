@@ -33,6 +33,7 @@
 | `wol/` | 50.110 Windows bot | 从 NAS 唤醒 50.110 的 magic packet 发送脚本（纯 stdlib，无依赖） |
 | `qinglong/` | 50.110 Windows bot | 青龙面板（50.1 docker）运维：API 形状坑、DB 直写姿势、订阅管理、第三方签到脚本（qlhub 类）部署、从全站 cookie 转储里扒单站 cookie；内网 IP 保留，凭证只在 gbrain |
 | `microsoft-rewards-signin/` | 50.110 Windows bot | 微软 Rewards 自动签到容器（50.1 docker，chiihero/Microsoft-Rewards-Script）：稳妥版配置只留签到/领分/连击、`.env` 改后必须 `docker compose up -d --force-recreate`、登录失败/临时锁处置、**故障模式：FIDO/passkey 拦截 → “应用活动被跳过” → 签到消失（含判据与处置）**、日报判定式与“❌ 未见签到记录”的假阳性坑；凭据只在 gbrain |
+| `bbs-techtreehole/` | 50.161 webui-hermes bot | bbs.techtreehole.com 论坛运维：NodeBB 4.16.2 部署升级、Resend SMTP 发信、Lucky 反代；凭据只在 gbrain，仓内零明文 |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -188,6 +189,11 @@ git push origin bot-<name>-<feature>
 ---
 
 ## 跨机记录（动了别人的地盘就记一笔）
+
+- **2026-10-13 · 161姐**：新增 `bbs-techtreehole/` 技能并同步进共享仓。
+  涵盖 NodeBB 4.16.2 升级、Resend SMTP 发信、Lucky 反代等完整运维记录；
+  已按铁律完成全量敏感信息脱敏（零明文密钥，全部指向 gbrain 脑页）；
+  西宫妹妹（110妹）pull 后可直接在共享技能库调阅。
 
 - **2026-09-22 · 161姐**：清理了 Unraid 侧
   `/boot/config/plugins/user.scripts/scripts.bak-20260909/Gemini_HA_Control/script` 里的**明文 Home Assistant 长期令牌**
