@@ -86,6 +86,13 @@ tag `26.10.1-1`);ipk `Depends` 仍是那 19 项硬依赖,逐项 `opkg list-insta
 - busybox **没有 `comm`**(踩:写 `comm -12 <(...) <(...)` 会报 `ash: comm: not found`,还会把计数弄成假 0),
   求交集/差集统一用 `awk "NR==FNR{h[\$1];next} (\$1 in h)" hold.txt list.txt`。
 
+第六轮实测(26.283 → 26.286,2026-10-16):形状与第四/五轮完全一致(64 行 - 4 `Multiple` = 60 真包,
+hold∩可更新 = 10 个,实升 **50**,唯一 Collected error 仍是 `/etc/config/luci` → `luci-opkg`)。
+- **有价值的旁证**:上上次手动升到 26.278 后,本轮的起点已是 26.283 —— 中间那一跳是**每周一 04:30 的
+  `/root/opkg-weekly-update.sh` 自己做掉的**(2026-10-12),面板没有任何报错 ⇒ 09-28 那次脚本加固
+  (过滤 `Multiple`、luci 家族绕过 hold、升完 `rpcd`+`uhttpd` restart)在**无人值守**下已验证有效。
+- 手动升级前先 `date` + `opkg list-installed | grep luci-base`:看到版本比上次记的高一档,就是周脚本跑过了,不是异常。
+
 ## SSH 会话会断两次(26.9.9→26.9.16 实测 2026-09-18)
 
 升级全程 SSH 会断线(exit 255)两次,这是正常现象不是失败:
