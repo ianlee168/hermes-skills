@@ -16,8 +16,73 @@ Home Unraid server: **192.168.50.1**, SSH as `root` (key-based auth from the Win
 | Running/finished markers | `/tmp/user.scripts/running/`, `/tmp/user.scripts/finished/` |
 | Plugin runtime copy | `/tmp/user.scripts/tmpScripts/<name>/script` |
 | Immich app dir | `/mnt/user/appdata/immich` (`.env`, `docker-compose.yml`) |
+| Immich photos storage | `/mnt/user/imch_photos` (upload/, library/, thumbs/, encoded-video/…) |
+| Immich port | 2283 (not 2238 — user sometimes misremembers) |
+
+### Immich storage layout & \"recent photos missing\" pitfall (v3.x)
+
+- **The Storage Template is OFF by default on new instances (Immich ≥1.92; the feature still exists in v3.x).** With it off, originals keep their UUID names under `upload/<owner-user-UUID>/<2hex>/<2hex>/<asset-UUID>.<ext>` and are NEVER date-organized; with it on, Immich moves them to `library/<user>/<yyyy>/<mm>/<dd>/<original name>`.
+- **A date-organized `library/` tree whose newest folder is years old is usually ORPHAN data, not "where the older photos live"** — it is the output of a template run on a previous install/migration, and everything uploaded since sits in `upload/`. Never answer "those are your older photos" from the folder tree; check the DB (below). Extra roots inside the same UPLOAD_LOCATION (`photos_backup/`-style) are leftover copies of an older install root, same treatment.
+- **Windows Explorer directory timestamp trap**: Windows Explorer shows the modification date of the top-level user UUID folders in `\\Ians\immich\upload\` (reflecting when the user was created, e.g. May). Linux filesystems do NOT update the parent directory's mtime when files are written deep into nested subdirectories (`.../12/b1/...`). A user seeing \"modified in May\" will wrongly assume backups/sync stopped.
+- **Verify actual latest uploads**:
+  - In Postgres (table names in v3.x are singular `asset` and `user`):
+    `docker exec immich_postgres psql -U postgres -d immich -c "SELECT u.email, a.\"originalFileName\", a.\"fileCreatedAt\", a.\"originalPath\" FROM asset a JOIN \"user\" u ON a.\"ownerId\" = u.id ORDER BY a.\"fileCreatedAt\" DESC LIMIT 10;"`
+  - On the host filesystem:
+    `find /mnt/user/imch_photos/upload/<user-uuid>/ -type f -printf '%TY-%Tm-%Td %TH:%TM:%TS %p\n' | sort -rn | head -10`
+- **Ground truth is the app's INDEX, never the folder tree**: count assets per `originalPath` prefix in Postgres — **0 rows for a prefix = that whole tree is unreferenced (orphan)**, however complete it looks. Prove duplication with `sha256sum` between a tree file and the DB-pointed copy, and offer any cleanup as `mv`-to-backup + explicit consent, never `rm`.
+- **`thumbs/` vs `upload/` & Desktop cloud backup trap**: `thumbs/<user-uuid>/...` contains ONLY generated web previews (`*_thumbnail.webp`, `*_preview.jpeg`, ~2.9GB), never original photos. Pointing desktop backup tools (Google Photos / Google Drive) to `thumbs/` results in zero uploads or uploads thousands of low-res web previews. Full-resolution originals and camera RAWs (.NEF) sit in `upload/<user-uuid>/...`.
+- **Google Drive for Desktop UNC limitation & Photos Deprecation**: Google Drive for Desktop (`GoogleDriveFS.exe`) only monitors local physical drive letters (C:, D:, etc. in `root_preference_sqlite.db`). Network UNC paths (`\\server\share\...`) selected in the GUI silently fail to register into `roots` — nothing uploads, with zero error. Furthermore, Google officially deprecated local folder backup to Google Photos in Drive for Desktop in mid-2026 (`Photos deprecation warnings`).
+- **rclone Google Photos API 429 quota trap & Custom Client ID setup**: Configuring an rclone remote for `google photos` with default client ID passes OAuth, but uploads fail with `429 Quota exceeded for quota metric 'Size of uploads per day' of photoslibrary.googleapis.com for project 202264815644` (rclone's public client ID is exhausted globally). Syncing to Google Photos via rclone strictly requires a custom Google Cloud OAuth Client ID/Secret (Desktop app type) with Photos Library API enabled. Google Drive (`type = drive`), in contrast, has no daily upload size cap on default client ID and works out of the box.
+- **Google OAuth Publishing Status for automations: NEVER revert to Testing mode**: In the Google Cloud Console (Google Auth Platform), "受众 (Audience)" configures publishing status. In **Testing mode (测试版)**, Google OAuth **refresh tokens expire in 7 days**, causing headless NAS automations to fail weekly. In **Production mode (正式版)**, refresh tokens remain valid **indefinitely** for personal unverified apps (up to 100 users), and manual "Test Users" entries are unnecessary. Always keep the app in Production mode for unattended daemons.
+- **`gphotos:upload` is write-only**: Listing `gphotos:upload` fails with `directory not found`, and `gphotos:media/all` times out on large libraries. Automated watcher/sync scripts (e.g. `inotifywait` on `/mnt/user/imch_photos/upload/`) must maintain a local ledger (append-log or state file) of uploaded file paths/hashes to avoid attempting redundant multi-gigabyte re-uploads.
+- ⚠️ **psql-over-ssh quoting**: SQL string literals can't be single-quoted inside `ssh host '...'`, and a bare `$$` inside the double-quoted `-c "..."` gets eaten by bash as the PID — write dollar-quoting as `\$\$...\$\$` (the ssh-level single quotes keep the backslash, bash then hands `$$` to Postgres). Using `"..."` instead fails with `column "%/library/%" does not exist`.
+- Full recipe (per-prefix counts, newest-asset query, duplicate proof, external-library check, template-enable advice, orphan-cleanup protocol): `references/immich-storage-layout.md`.
 
 Known scripts: `immich update`, `Docker_Proxy`, `Gemini_HA_Control`, `delete.ds_store`, `delete_dangling_images`, `viewDockerLogSize`.
+
+## Adding an SMB share for any Unraid path
+
+To expose a path (e.g. `/mnt/user/imch_photos`) as a Windows-accessible `\\Ians\<name>` share:
+
+```bash
+# Append to smb-extra.conf (persists on /boot flash)
+ssh root@192.168.50.1 'cat >> /boot/config/smb-extra.conf << "EOF"
+[sharename]
+	path = /mnt/user/<path>
+	comment = Description
+	browseable = yes
+	public = yes
+	writeable = no
+	case sensitive = auto
+	preserve case = yes
+	short preserve case = yes
+	vfs objects = catia fruit streams_xattr
+	fruit:encoding = native
+	force user = nobody
+EOF
+'
+# Hot-reload without restarting SMB (existing connections unaffected):
+ssh root@192.168.50.1 "smbcontrol smbd reload-config"
+# Verify from Windows:
+ls "//Ians/sharename/"
+```
+
+- `smb-extra.conf` is the hook for user-defined shares; Unraid's auto-generated shares live in `smb-shares.conf` (don't edit that).
+- `writeable = no` + `force user = nobody` = read-only guest access; change to `writeable = yes` for write access.
+- Existing shares (NAS, flash) are in `smb-shares.conf`; `smb-names.conf` has `netbios name = Ians`.
+- **Don't confuse `smb-extra.conf` with `smb-shares.conf`** — the latter is auto-generated by Unraid's share management and will be overwritten.
+- Active shares as of 2026-10: `[NAS]` → `/mnt/user/NAS` (public r/w), `[immich]` → `/mnt/user/imch_photos` (public r/o), `[flash]` → `/boot` (public r/o).
+
+## Finding where a Docker container stores data
+
+```bash
+# One-liner to list all mounts (host → container):
+docker inspect <container> --format '{{json .Mounts}}' | python3 -c "import sys,json; [print(f'{m[\"Source\"]} -> {m[\"Destination\"]}') for m in json.loads(sys.stdin.read())]"
+# python3 is absent on Unraid — use jq or grep instead:
+docker inspect <container> --format '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}'
+```
+
+Always check mounts FIRST before assuming where config/data lives — the path the user thinks a container uses may be wrong (split-brain section below).
 
 ## Debugging workflow (in order)
 
@@ -29,6 +94,16 @@ Known scripts: `immich update`, `Docker_Proxy`, `Gemini_HA_Control`, `delete.ds_
    PATH=/tmp/<name>-sb/bin:$PATH bash script.sh    # scenario A: .env says OLD version; B: .env says latest
    ```
    The stub also proves the script's control flow (`pull` then `up -d`, which branch, exit status) before it ever touches production.
+   **Prove the failure branches too** — a stub that only ever succeeds cannot show whether the retry loop actually retries or whether a give-up path really skips the destructive step. Make the stub fail N times from a counter file and run it twice:
+   ```sh
+   # inside the stub, for any command that can fail:
+   N=$(cat /tmp/<name>-sb/bin/count 2>/dev/null || echo 0); N=$((N+1)); echo "$N" > /tmp/<name>-sb/bin/count
+   [ "$N" -le "${STUB_FAIL_TIMES:-0}" ] && { echo "toomanyrequests ..." >&2; exit 1; }
+   ```
+   ```bash
+   STUB_FAIL_TIMES=1  PATH=/tmp/<name>-sb/bin:$PATH bash script.sh   # must warn, retry, then complete (exit 0)
+   STUB_FAIL_TIMES=99 PATH=/tmp/<name>-sb/bin:$PATH bash script.sh   # must give up non-zero and NEVER reach `up -d`
+   ```
 4. **Forensics — reconstruct what already ran**: `ls -la --time-style=full-iso` + `md5sum` on `.env`, compose, `*.bak` files. Backup created but `.env` mtime unchanged = the chain died between those steps.
 5. **Validate compose from the project dir**: `docker compose -f <file> config` resolves `.env` relative to the compose file's dir, NOT the cwd. Testing with the file in /tmp yields false "variable is not set" errors.
 
@@ -36,7 +111,14 @@ Known scripts: `immich update`, `Docker_Proxy`, `Gemini_HA_Control`, `delete.ds_
 
 - **GitHub API `/releases/latest` tag parsing is these scripts' #1 failure mode — it has now broken TWICE, with two DIFFERENT response shapes.** (a) *compact single-line* JSON: `grep '"tag_name"' | cut -d'"' -f4` matches the whole line, so `cut -f4` grabs the wrong field (the API `url`) — LATEST becomes `https://api.github.com/...`, then `sed -i "s/.../$LATEST/"` dies with `unknown option to 's'` and the `&&` chain aborts mid-flight. (b) **pretty-printed JSON — what the API returns now** (verified live 2026-10-02: 415 lines, `  "tag_name": "v3.2.4",` **with a space after the colon**): the (a)-fix pattern `grep -o '"tag_name":"[^"]*"'` (no space) matches NOTHING → LATEST empty → the `[ -z "$LATEST" ]` guard aborts *before* anything happens, and the user just sees "Could not determine latest version from GitHub API". **Shape-independent fix** (verified against the live API *and* synthetic single-line JSON): `sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1`, plus a second, API-free source — `curl -sIL https://github.com/<owner>/<repo>/releases/latest | grep -i '^location:' | tail -1 | sed -E 's#.*/tag/##'` (the redirect target IS the tag; no rate limit, no JSON) — plus dumping the raw response to `/tmp/<app>-gh-response.json` before aborting so the next diagnosis isn't blind. **Never trust a previous "we already fixed that grep" note without re-running it against the live response.**
 - **Long `&&` chains abort silently.** No output, no error — the user just sees "didn't work". Diagnose with `set -x` or echo-after-each-step.
-- **`docker compose pull`/`up -d` may never have run** — check `docker images` for the expected new tag before blaming Docker.
+## Immich → Google Photos 自动同步守护 (2026-10-16 部署)
+
+- **原理**：用 `/boot/custom/scripts/immich-gphotos-sync.sh` 守护进程，后台用 `inotifywait -m -r -e close_write,moved_to` 实时监听 `/mnt/user/imch_photos/upload`。
+- **优先级队列**：新增照片进 `QUEUE_RT` 实时高优上传；历史存量进 `QUEUE_BF` 后台闲时慢推（不阻塞新照片）。
+- **去重账本**：`/boot/custom/scripts/immich-gphotos-uploaded.list` 记录已上传文件路径，杜绝重复上传。
+- **开机自启 + 看护**：`/boot/config/go` 启动 + root crontab 每 5 分钟保活检测（PID 单例）。
+- **Google Photos API 坑**：公共 client_id 会报 429 `Size of uploads per day`；必须用自建项目的专属桌面 Client ID/Secret，且发布状态必须为「正式版 (Production)」，Token 才会永久有效（测试版 7 天过期）。上传目标用 `gphotos:upload`。
+- 日志位置：`/var/log/immich-gphotos-sync.log`。
 - **`docker compose pull` can die on a transient registry 429 and leave a half-applied upgrade.** 2026-10-08 (Immich v3.2.4→v3.3.0): `error pulling image configuration: download failed after attempts=1: toomanyrequests: retry-after: 207.µs, allowed: 44000/minute` on the digest-pinned `docker.io/valkey/valkey:9@sha256:…` (the GHCR immich images were fine). Only BLOB downloads 429 — the manifest fetch returns 200, so don't chase the network. Root cause: registry traffic exits through the passwall proxy, so Docker Hub meters a SHARED node IP (`curl -D- .../manifests/<digest>` prints `docker-ratelimit-source: <proxy-ip>`), not the house WAN. It is bursty — the same `docker pull` succeeded on the first manual retry. **Fixed in the script: `docker compose pull` now retries 5×20s before aborting** (v3.1). ⚠️ Digest-pinned docker.io images show `RepoTags=[]` in `docker inspect`, so `docker images | grep <name>` prints NOTHING even though they exist — look them up via `ID=$(docker inspect -f '{{.Image}}' <container>)`, then `docker inspect -f '{{json .RepoDigests}}' $ID`, and **compare with the compose pin** to know whether a real download is even needed. Full case + recovery recipe: `references/immich-update-script.md` (Bug 3).
 - **A killed/aborted run leaves a HALF-APPLIED upgrade**: the file edits (.env version + compose) happen *before* the pull, so a run interrupted by closing the plugin window ("closing this window will abort the execution of this script") leaves `.env`/compose claiming the NEW version while the containers still run the OLD one and no new image exists locally. Re-running is safe and self-healing: versions now match → the "Already on" branch does `pull` + `up -d` and finishes the migration. Diagnose with three cross-checks — file mtime of `.env`/`docker-compose.yml`, `docker images | grep <app>`, `docker ps` — and never report "update done" from the file version alone.
 
@@ -46,6 +128,12 @@ Known scripts: `immich update`, `Docker_Proxy`, `Gemini_HA_Control`, `delete.ds_
 2. scp the fixed script up → copy over → `chmod +x`
 3. Verify on disk: `head -15 '<script>'`
 4. Have the user run it once in the plugin UI; console output "Already on vX.Y.Z" = success path reached.
+5. **After a failed mid-run, finish the job yourself over SSH — don't wait for the user to press Run again.** A failed `pull` leaves the app half-upgraded (files new, containers old), and the user's standing instruction is to fix it, not to ask. For a multi-GB pull never use a foreground SSH call (it can time out mid-download):
+   ```bash
+   nohup bash -c 'cd /mnt/user/appdata/<app> && docker compose pull && docker compose up -d' > /tmp/<app>-upgrade.log 2>&1 &
+   # poll every ~1-2 min: grep -aiE "error|toomanyrequests|Pulled$" /tmp/<app>-upgrade.log ; pgrep -af "compose (pull|up)"
+   ```
+   Then verify by EVIDENCE, not by the files: `docker compose ps` shows the new tag healthy **and** the app's own version endpoint answers (e.g. Immich `curl -s http://127.0.0.1:2283/api/server/version`).
 
 ## Cache layout & backups (inventory as of 2026-08-05)
 
@@ -304,17 +392,17 @@ Measured from the server's domestic broadband (download fine, upstream throttled
 
 ## Local LAN backup — rclone SFTP pull to the Windows host (2026-08-06, THE working route for big data)
 
-The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
+The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\ianle\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
 
 ```bash
-rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/<user>/.ssh/id_rsa"
+rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/ianle/.ssh/id_rsa"
 rclone lsd unraid:/mnt/cache/                 # verify
 rclone copy unraid:/mnt/cache/appdata "F:/unraid-backup/appdata" --stats 15s -v
 rclone copy unraid:/mnt/cache/domains "F:/unraid-backup/domains" --stats 30s -v   # big one
 ```
 
 - **Speed ~64-71 MiB/s** (gigabit LAN incl. SSH overhead) → 287G ≈ 75 min. qBittorrent `ipc-socket` errors (`SSH_FX_FAILURE`) are normal — runtime socket, not a real file; ignore.
-- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/<user>/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
+- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/ianle/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
 - **Sparse-file caveat**: SFTP backend has no sparse handling — a vdisk tree that `du`s 357G but is logically 664G transfers as 664G. F: drive must fit LOGICAL size; ETA ≈ 2.5-3h, not 1.2h.
 - **Consistency**: copying a RUNNING VM's vdisk = hot copy (restore may need fsck). Clean backup = stop VM → re-run `rclone copy` (incremental, only the delta, minutes) → start VM. NEVER stop `openwrt` if it is the soft-router — the whole LAN dies.
 
@@ -395,12 +483,12 @@ Watchdog (installed 2026-08-12): `/boot/custom/scripts/go2rtc-watchdog.sh` runs 
 - **新形态:重启 go2rtc 也没用**。日志反复 `cs2: pop buffer is full` + `probe: miss: read media: ... i/o timeout`(TCP 能连上摄像头 192.168.50.66,但 P2P 媒体读不到)= **摄像头端 P2P 会话卡死**,不是凭据 401。排查顺序:
   1. `docker logs --since 6m go2rtc | grep -iE "xiaomi|401|i/o timeout|buffer"` 区分 401(凭据)vs i/o timeout(摄像头端会话)
   2. 先让用户**重启摄像头**(拔电 10 秒 / 米家 App),重置 P2P 会话
-  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"<phone>": "<password>"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
+  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"<小米账号>": "<见 gbrain>"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
 - ⚠️ **PITFALL:WebUI 保存/登录会重写 go2rtc.yaml 并清空 `streams:` 节**(实测:登录后配置文件只剩 14 行,cw300 定义丢失 → 流全断,快照冻结)。**WebUI 操作前必须 `cp go2rtc.yaml go2rtc.yaml.bak-$(date +%Y%m%d-%H%M%S)`**,操作后核对 streams 节,丢了就从备份补回:
   ```yaml
   streams:
     cw300:
-      - "xiaomi://<phone>:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
+      - "xiaomi://<小米账号>:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
   ```
   然后 `docker restart go2rtc`。注意 URL 里的 `&` 在 sed append 文本里无需转义,在替换串里要写成 `\&`。
 - **验证要过硬(2026-08-27 教训,用户原话"修好的p啊")**:快照字节数相同 ≠ 恢复(冻结帧可能返回完全相同字节,51KB 两次一致是假象)。**唯一硬证据 = `curl -s http://127.0.0.1:1986/api/streams`**,producer 显示 `remote_addr: 192.168.50.66:<port>` + `bytes`/`packets` 持续增长 + 最近 2 分钟 401 计数为 0,才宣布恢复。
@@ -597,7 +685,8 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 ## References
 
 - `references/cpu-heat-diagnosis.md` — CPU/风扇高温全记录:hwmon 映射与 80°C 归因、qemu 热点判归属、pwm2/fan2 实测表、自建 CPU 风扇曲线接管;**夜间/持续高温归因手法**(对齐 `/var/log/cpu-fan-curve.log` 与作业时间轴、先量基线、查对方机器的关机习惯、**短作业的长热尾巴 + 候选作业清单:1 分钟粒度找上升沿,别只看正在修的那个作业**)。
-- `references/immich-update-script.md` — Immich updater: both GitHub-API tag-parse failure shapes + the shape-independent extraction, the stub-docker sandbox deploy ritual, half-applied-run recovery (files new / containers old), and the pre-migration `pg_dumpall` safety net.
+- `references/immich-update-script.md` — Immich updater: both GitHub-API tag-parse failure shapes + the shape-independent extraction, registry-429 pull retry (Bug 3) + digest-pinned-image lookup, the stub-docker sandbox deploy ritual **with counter-based failure injection**, half-applied-run recovery (files new / containers old), and the pre-migration `pg_dumpall` safety net.
+- `references/immich-storage-layout.md` — Immich 存储布局判读:Storage Template 默认关闭 → `upload/` UUID 平铺 vs `library/<年>/…`;用 DB `originalPath` 前缀计数定"哪份是活的"(0 行 = 孤儿树)、sha256 证明重复、psql-over-ssh 的美元引用坑、开模板 + 跑迁移任务让 SMB 按年月可浏览、孤儿树 mv 式清理协议。
 - `references/cache-and-cloud-backup.md` — dated cache/VM/docker inventory + R2 sizing math (2026-08-05).
 - `references/wtr-pro-hardware.md` — WTR PRO motherboard/slot/disk inventory, no-parity finding, important-data tiers, SMART health sweep (2026-08-05).
 - `references/rclone-gdrive-headless-oauth.md` — headless Google Drive OAuth on the server (5TB account), full interactive transcript + session state (2026-08-06).
