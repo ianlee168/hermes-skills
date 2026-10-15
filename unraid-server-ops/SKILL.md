@@ -114,10 +114,18 @@ Always check mounts FIRST before assuming where config/data lives — the path t
 ## Immich → Google Photos 自动同步守护 (2026-10-16 部署)
 
 - **原理**：用 `/boot/custom/scripts/immich-gphotos-sync.sh` 守护进程，后台用 `inotifywait -m -r -e close_write,moved_to` 实时监听 `/mnt/user/imch_photos/upload`。
-- **优先级队列**：新增照片进 `QUEUE_RT` 实时高优上传；历史存量进 `QUEUE_BF` 后台闲时慢推（不阻塞新照片）。
-- **去重账本**：`/boot/custom/scripts/immich-gphotos-uploaded.list` 记录已上传文件路径，杜绝重复上传。
+- **范围策略 (2026+ only)**：只同步 2026 年及以后的照片（2025 及以前的历史旧图已在 Google Photos 存过，直接打入账本忽略防重复）。
+- **双优先级队列**：新增照片进 `QUEUE_RT` 实时高优上传（秒级响应）；2026 存量进 `QUEUE_BF` 后台闲时慢推（最新优先，不阻塞新照片）。
+- **去重账本**：`/boot/custom/scripts/immich-gphotos-uploaded.list` 记录已上传/已忽略文件绝对路径，杜绝重复上传。
 - **开机自启 + 看护**：`/boot/config/go` 启动 + root crontab 每 5 分钟保活检测（PID 单例）。
-- **Google Photos API 坑**：公共 client_id 会报 429 `Size of uploads per day`；必须用自建项目的专属桌面 Client ID/Secret，且发布状态必须为「正式版 (Production)」，Token 才会永久有效（测试版 7 天过期）。上传目标用 `gphotos:upload`。
+- **Google Photos API 坑**：公共 client_id 会报 429 `Size of uploads per day`；必须用自建项目的专属桌面 Client ID/Secret。上传目标用 `gphotos:upload`。
+- **Google Auth Platform (2026 UI) 规则**：
+  - 左侧边栏「目标对象 (Audience)」看状态与测试用户；「客户端 (Clients)」创建凭证。
+  - 创建客户端时**不要勾选**「Use this client for an AI-powered agent」（那是 Workspace MCP 专属限制）。
+  - 发布状态**必须保持「正式版 (Production)」**：测试版 7 天强制过期 Token，正式版 Token 永久有效且无需手动添加测试用户。
+- **⚠️ 存量回填队列必须按时间倒序（newest first）**：
+  若直接 `find "$WATCH_DIR" -type f`，Linux 按目录字母序遍历，会先扫到老用户目录（如 2008 年的 6000 张旧图），导致用户今天刚传的新照片排在队尾（第 12,000 位）。又因 Google 相册按 EXIF 拍摄日期归档，旧图全落在十几年前的瀑布流底下，用户刷新主页看不到任何新图，误判为“没上传”。
+  **修复规则**：从 Immich DB（`fileCreatedAt >= 2026` 倒序）抽取 2026 清单压入回填队列；老旧照片全数入账本忽略。
 - 日志位置：`/var/log/immich-gphotos-sync.log`。
 - **`docker compose pull` can die on a transient registry 429 and leave a half-applied upgrade.** 2026-10-08 (Immich v3.2.4→v3.3.0): `error pulling image configuration: download failed after attempts=1: toomanyrequests: retry-after: 207.µs, allowed: 44000/minute` on the digest-pinned `docker.io/valkey/valkey:9@sha256:…` (the GHCR immich images were fine). Only BLOB downloads 429 — the manifest fetch returns 200, so don't chase the network. Root cause: registry traffic exits through the passwall proxy, so Docker Hub meters a SHARED node IP (`curl -D- .../manifests/<digest>` prints `docker-ratelimit-source: <proxy-ip>`), not the house WAN. It is bursty — the same `docker pull` succeeded on the first manual retry. **Fixed in the script: `docker compose pull` now retries 5×20s before aborting** (v3.1). ⚠️ Digest-pinned docker.io images show `RepoTags=[]` in `docker inspect`, so `docker images | grep <name>` prints NOTHING even though they exist — look them up via `ID=$(docker inspect -f '{{.Image}}' <container>)`, then `docker inspect -f '{{json .RepoDigests}}' $ID`, and **compare with the compose pin** to know whether a real download is even needed. Full case + recovery recipe: `references/immich-update-script.md` (Bug 3).
 - **A killed/aborted run leaves a HALF-APPLIED upgrade**: the file edits (.env version + compose) happen *before* the pull, so a run interrupted by closing the plugin window ("closing this window will abort the execution of this script") leaves `.env`/compose claiming the NEW version while the containers still run the OLD one and no new image exists locally. Re-running is safe and self-healing: versions now match → the "Already on" branch does `pull` + `up -d` and finishes the migration. Diagnose with three cross-checks — file mtime of `.env`/`docker-compose.yml`, `docker images | grep <app>`, `docker ps` — and never report "update done" from the file version alone.
