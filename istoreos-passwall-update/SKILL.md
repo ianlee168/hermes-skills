@@ -293,6 +293,30 @@ asyncio.run(main())
 - 面板 http://192.168.50.5:2026,首次访问强制设管理密码;LuCI 兜底页在 服务→Open-Box。
 - SSH 直连 GitHub raw 可达(301 正常),78MB 资产下载建议 --mirror(ghfast.top 已验证可用)。
 
+## ⚠️ 面板里的「更新」按钮失败 = api-cache JSON 里没有 .ipk 资产(2026-10-16 实证)
+
+症状:旧版页面(设置 → 应用更新)点「更新」→ 弹 `更新失败：未知错误`,而**手动下 ipk 装完全正常**。
+用户看到的就是这句话(例:"Passwall 版本【 26.10.4-1 】 更新失败")。
+
+机制(`/usr/lib/lua/luci/passwall/api.lua`):
+- `to_check_self()` 从 `https://github.com/Openwrt-Passwall/openwrt-passwall-packages/releases/download/api-cache/<name>-release-api.json`
+  取"最新版"信息,非 apk 系统要求资产名以 `23.05-24.10_` 开头**且**以 `.ipk` 结尾;
+- 匹配不到就 `return {code = 1}`(**不带 error 字段**)→ 前端 JS 就显示原文 `更新失败` + `未知错误`。
+  "未知"就是这么来的,不是网络/代理报错。
+- 成功路径:下载到 `/tmp/passwall_download.<id>{1,2}` → `to_install_self()` →
+  `/usr/share/passwall/luci_update.sh` → `opkg install`;状态写 `/www/luci-static/resources/passwall-update/<id>.json`。
+  看不到这些临时文件/状态目录,说明失败在**匹配或下载**阶段,根本没进安装。
+
+诊断(30 秒,写完就能下结论):
+```sh
+curl -skfL -o /tmp/pw-api.json \
+  "https://github.com/Openwrt-Passwall/openwrt-passwall-packages/releases/download/api-cache/passwall-release-api.json"
+grep -o "\"name\": \"[^\"]*\"" /tmp/pw-api.json    # 26.10.16-1 只有 25.12+_*.apk 两条
+grep -c "23.05-24.10_.*\.ipk" /tmp/pw-api.json      # 0 ⇒ 面板必然报"更新失败"
+```
+**同时确认 GitHub release 页面上的 ipk 是齐的**(直下 858232 字节正常)⇒ 上游 api-cache 快照缺 ipk,
+不是路由器/网络问题。结论:面板更新器在非 apk 固件(iStoreOS 24.10)上走不通,**继续走本文的手动 ipk 流程**。
+
 ## 环境备忘(50.110 实测)
 
 - iStoreOS: 192.168.50.5, dropbear 端口 64891, root, 本机公钥已授权
