@@ -2,7 +2,7 @@
 name: home-assistant-api
 description: Use when reading or controlling Home Assistant entities.
 version: 1.0.0
-author: 本机 bot (<THIS_HOST>)
+author: 50.110 bot
 platforms: [windows, linux, macos]
 tags: [home-assistant, smart-home, api, credentials]
 metadata:
@@ -19,10 +19,10 @@ metadata:
 ## 地址:必须写全 4 段
 
 ❌ `curl http://50.206:8123/` → Windows 把 `50.206` 解析成 IP **50.0.0.206**,超时。
-✅ `http://<HA_HOST>:8123/` —— 本机(<THIS_HOST>)与 HA 同网段。
+✅ `http://192.168.50.206:8123/` —— 本机(50.110)与 HA 同网段。
 
-- 内存里的 `50.206` 只是简写,**发请求时永远补全 <HA_HOST>.**
-- 401 = 实例在跑、但请求没带 token;连不上时先跑 ping <HA_HOST> 再怀疑服务。
+- 内存里的 `50.206` 只是简写,**发请求时永远补全 192.168.50.**
+- 401 = 实例在跑、但请求没带 token;连不上时先跑 ping 192.168.50.206 再怀疑服务。
 
 ## 令牌位置(不要问用户要第二次)
 
@@ -37,9 +37,9 @@ metadata:
 ## 快速验证(先查证再答)
 
 ```bash
-curl -s -o /dev/null -w '%{http_code}\n' http://<HA_HOST>:8123/api/
-curl -s -H "Authorization: Bearer $HASS_TOKEN" http://<HA_HOST>:8123/api/
-curl -s -H "Authorization: Bearer $HASS_TOKEN" http://<HA_HOST>:8123/api/config | head -c 200
+curl -s -o /dev/null -w '%{http_code}\n' http://192.168.50.206:8123/api/
+curl -s -H "Authorization: Bearer $HASS_TOKEN" http://192.168.50.206:8123/api/
+curl -s -H "Authorization: Bearer $HASS_TOKEN" http://192.168.50.206:8123/api/config | head -c 200
 ```
 
 `/api/states` 一次拉全部实体;`/api/services` 拉可调用的服务。
@@ -51,7 +51,7 @@ import urllib.request, json
 TOKEN = <从 .env 读 HASS_TOKEN>
 def api(path, payload=None):
     data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request("http://<HA_HOST>:8123"+path, data=data,
+    req = urllib.request.Request("http://192.168.50.206:8123"+path, data=data,
         headers={"Authorization":"Bearer "+TOKEN, "Content-Type":"application/json"})
     return json.load(urllib.request.urlopen(req, timeout=20))
 ```
@@ -65,7 +65,7 @@ def api(path, payload=None):
 - ✅ 回读用 **WebSocket** `persistent_notification/get`(本机 `websockets` 库可用):
 
 ```python
-ws://<HA_HOST>:8123/api/websocket
+ws://192.168.50.206:8123/api/websocket
 # 收 auth_required → 发 {"type":"auth","access_token":TOKEN} → 收 auth_ok
 # 发 {"id":1,"type":"persistent_notification/get"} → 返回列表
 ```
@@ -111,18 +111,41 @@ hermes gateway status                                                    # 看�
   2026.9.2 实测非设备 target(`notify` / `persistent_notification` / 编造名)全部 **HTTP 500**,
   只有 `mobile_app_<device>` 这类设备 target 才有戏;要在 cron 里推 HA 通知先实测确认。
 
-## 改 HA 配置文件：匿名 SMB 直通(2026-09-13 实测)
+## 改 HA 配置文件：SMB 直通与凭证管理
 
-**HA 的 `/config` 目录可以通过 SMB 直接读写,Samba 插件未设密码(guest 可写)**:
-
-```bash
-ls //<HA_HOST>/config          # 直接能列目录,无需凭据
-cp file //<HA_HOST>/config/www/ # 直接能写
-```
-
-- 端口 **445 开着**就是入口;22222(SSH 插件)/1337(Code Server)/8099(File Editor) 都关着。
-- ⚠️ `net view` 会报 1702,别被误导——直接访问 UNC 路径就行。
+**HA 的 `/config` 目录通过 SMB 挂载读写**：
+- 端口 **445 开着**就是入口；22222(SSH 插件)/1337(Code Server)/8099(File Editor) 默认关闭。
+- ⚠️ **并非匿名直通**：Samba 插件（`core_samba`）配置了用户名 `homeassistant` 与密码。
+- 50.110 本机能免输密码访问 `\\192.168.50.206\config`，是因为 Windows 凭据管理器（`cmdkey /list`）已缓存目标凭据：
+  `cmdkey /list` → `Domain:target=192.168.50.206`, 用户: `homeassistant`。
+- 若密码变更或凭据失效，用 `cmdkey /add:192.168.50.206 /user:homeassistant /pass:<密码>` 刷新（注意：SMB 走网络域凭据，须用 `/add:` 而非 `/generic:`）。
+- 凭据存储位置：gbrain `credentials/ha-samba`。
+- ⚠️ 注意端口冲突：官方 `core_samba` 与第三方 `7eca76cc_sambaeasynas`（Samba Easy NAS）均为 `host_network: true`，不可同时运行监听 445，否则易导致找不到共享名（错误 67）。建议停用 Easy NAS 并设 boot 为 manual。
+- ⚠️ `net view \\192.168.50.206` 会报 1702，别被误导——直接访问 UNC 路径即可：
+  ```bash
+  ls //192.168.50.206/config
+  cp file //192.168.50.206/config/www/
+  ```
 - **改任何文件前先建时间戳备份目录**(如 `/config/.hermes-backup-YYYYMMDD/`)再 cp 原件。
+
+## HA 系统修复（Repairs）与 Supervisor 告警排查
+
+HA 2024+ 引入 Have I Been Pwned (HIBP) 安全检查，Supervisor 会自动比对插件密码：
+- 若插件（如 `core_samba` 或 `7eca76cc_sambaeasynas`）密码设为 `123` 等常见弱口令，HA 会报系统修复警告：
+  `在应用配置中检测到不安全的机密信息：应用“Samba share”在其配置中使用的密钥或密码被检测为不安全`。
+- **WebSocket 诊断与处理**：
+  ```python
+  # 1. 查所有系统修复问题
+  await ws.send(json.dumps({"id": 1, "type": "repairs/list_issues"}))
+  # 返回 issues: [{ "domain": "hassio", "translation_key": "issue_addon_pwned", "translation_placeholders": {"addon": "Samba share", "reference": "core_samba"} }]
+
+  # 2. 查插件当前配置与运行状态
+  await ws.send(json.dumps({"id": 2, "type": "supervisor/api", "endpoint": "/addons/core_samba/info", "method": "get"}))
+
+  # 3. 忽略指定告警（消除前端/手机推送）
+  await ws.send(json.dumps({"id": 3, "type": "repairs/ignore_issue", "issue_id": "<issue_id>", "domain": "hassio", "ignore": True}))
+  ```
+- **彻底消除告警**：在插件配置中将密码改成未泄漏的强密码，或在前端/WS 标记为 ignore。若改了 Samba 密码，必须同步用 `cmdkey` 更新本机 Windows 凭据，否则 50.110 对 `//192.168.50.206/config` 的文件读写会立刻报权限错误。
 
 ### YAML 模式仪表盘三个坑(都踩过)
 
