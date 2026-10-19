@@ -35,7 +35,7 @@ tags: [docker, scheduling, qinglong]
 | `/api/login` | POST | 登录获取 token |
 | `/api/run/<id>` | GET | ⚠️ 返回 SPA HTML 不是日志 — 日志直接读宿主机文件(见下) |
 | `/api/crons/run` | PUT | 触发任务执行: body 是**数组** `[id]`(不是 `{"ids":[...]}`) |
-| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable`。⚠️ **id 必须是字符串**：传数字数组(`[2362]`)会被校验判空 → **全库一起操作**,两个方向都踩过: `disable` 把 63 个任务全停用；`enable` 把 55 个 JD 任务连"已停用"的意图一起**静默打开**(当晚 19:21/19:38 就用失效 cookie 跑起来了)。**调 enable/disable 前先备份全量 id+isDisabled 清单,调完立即复核 `isDisabled`**,别只看返回 code 200 |
+| `/api/crons/disable` | PUT | 停用任务: body 数组 `["id1","id2"]`(与 run 同款);启用同理 `/api/crons/enable`。⚠️ **id 必须是字符串**：传数字数组(`[2362]`)会被校验判空 → **全库一起操作**,两个方向都踩过: `disable` 把 63 个任务全停用；`enable` 把 55 个 JD 任务连"已停用"的意图一起**静默打开**(当晚 19:21/19:38 就用失效 cookie 跑起来了)。**调 enable/disable 前先备份全量 id+isDisabled 清单,调完立即做「差异复核」**: 对比前后启用集合,新启用集合必须**恰好等于**目标 id 集合;不等就立刻把多出来的 id `disable` 回去。只看返回 code 200 不够(踩过全库误开)。标准动作: 存 `crons_backup_<ts>.json` → `PUT /api/crons/enable ["id",..]`(**字符串**数组) → 重拉列表算集合差 → 差异不符自动回滚并报告 |
 | `/api/envs/enable` | PUT | 启用环境变量: body 是**数组** `["id1","id2"]`(id 为字符串);禁用同理 `/api/envs/disable` |
 | `/api/dependencies` | POST | 加依赖: body 是数组 `[{"type":1,"name":"requests"}]` — **type 必须数字**(0=node/1=python3/2=linux)、**name 必须字符串**,数组/数字 name 都报 400 |
 
@@ -153,6 +153,19 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 1. **多端登录互顶(最常见)**: 青龙用着网页 cookie 期间,用户又在京东 App/网页登录,京东作废旧凭证。**必问用户**: 失效时间窗内有没有在别的设备登录过京东。根治=一处登录为准,或改用 App 抓的 wskey(见下节)。
 2. **风控标记后续作废**: 前几天发生过 IP 漂移 / 全量并发 / 面部识别,账号处于观察期,新 cookie 也会被静默作废(表现:任务报错但 env 还是 status=0,直到下一次 CheckCK 才禁用)。
 3. **30 天自然到期**: 只有失效时间窗对得上 ~30 天才成立。
+3b. **账号级风控标记(最坏的一档)**: 新抓的 CK/ wskey **几小时到一天就废**,且 wskey 转换长期在 `fake` 与 `tokenKey=xxx` 之间反复 → 不是抓法问题、不是 IP 漂移、也不是值写错。**判据**: 拿"CK 写入时刻"(env 的 timestamp)对比"第一个 403/401 的任务日志时刻",差值 < 24h 且期间无重启/换 IP = 账号被标记。**证据链必须同时排除 IP 维度**: 同出口 IP 下其它账号能转成功(2026-10 实测: 账号2/3 成功、账号1 连续两周失败)。**处置(唯一有效路)**: ① **全停该账号所有京东任务**——每天几十个失败请求等于给风控标记"续命",不停永远不会好;② 静养 2-3 周,期间只在手机上正常使用(浏览/下单),不抓包、不退出登录、不改密码;③ 恢复时**只开 3 个低频任务**(种豆得豆/资产统计/一键价保)跑 3-5 天再加;④ 静养后仍不活 = 长期标记,放弃自动化或换号。另: 面板上堆着 50+ 任务对一个已死 CK 空跑,是主动给账号刷风控,不是"多跑多赚"。
+
+**0. 新 CK 活不过一天 = 账号级风控标记(先查这条,别急着让用户重抓)** —— 一个健康账号的 `pt_key` 能活 30 天。若用户贴的 key **几小时内**就 403/401，抓法本身没问题，是京东在账号侧主动作废。取证四步，全部有据再下结论：
+   1. `GET /api/envs` 取该 JD_COOKIE 的 `timestamp` = 用户贴 key 的时刻（**别用 `updatedAt`**，它会被启停覆盖）
+   2. 找该时刻之后**第一份**出现 `403 Forbidden` / `401 Unauthorized` 的任务日志（`jd_bean_change` 最灵敏），两点相减 = 实际存活时长
+   3. `uptime` 看宿主机在窗口内有没有重启 + `docker exec qinglong curl -s https://myip.ipip.net` 与上次记录比对 → 排除 IP 漂移
+   4. `ls -d 6dylan6_jdpro_*/<日期>-<时>-*.log | wc -l` 数出窗口内跑过多少个京东任务
+   - 实测形态：key 写入 16:34 → 21:28 已 403/401（**不到 5 小时**），期间 IP 未变、只跑了 9 个任务 → 账号级标记，既不是网络也不是 key 死了。
+   - **关键机制：失败请求自己会维系标记**。面板上留 50+ 个京东任务常驻启用时，CK 一失效，每天几十次请求全变成 403/401 打在同一个号上 = 每天告诉京东一遍「这是机器人」，标记永远不退，新 key 必然短命。所以处置不是「换个抓法」，而是：
+     - 全停该账号的**全部**京东任务 + 转换任务（`2335`/`2334`），CK 检测也别手动跑
+     - 静养 2–3 周，期间只在手机 App 正常用（浏览/看订单/下单），不抓包、不退出登录、不改密码
+     - 恢复时**只开 3 个**（如 `2317 种豆得豆` + `2288 资产统计` + `2287 一键价保`），跑 3–5 天无异常再加；一次开回 50 个必然复发
+   - 静养后仍不活 → 该号被长期标记，放弃自动化或换号，别再折腾抓法。
 
 **用任务日志夹出失效时间窗**: 挑一个每天固定跑的同一任务(如每日 08:38/13:38 的 jd_joypark_task),`ls -t /ql/data/log/<repo>_<任务名>/*.log` 对比相邻两份——最后一次有「领取奖励/成功」的与第一次报错的之间就是失效窗口;拿这个窗口去问用户当天在别的设备做过什么,比反复重抓有效。任务日志里的失效表现是 `账号XXX执行异常 TypeError: Cannot read properties of undefined (reading 'length')`(接口拿不到数据),与 CheckCK 的「已失效」文案不同,别认错。
 
@@ -388,7 +401,7 @@ jd_wskey.py 的 `appjmp()` 有两条失败分支,含义完全不同:
 
 另: 脚本会对**每个失效 CK** 都跑这套判定并打印其中一条(不是只看 JD_WSCK),所以“三个账号三行 × 状态失效/禁用”不代表三个账号都配了 wskey。
 
-**替换 JD_WSCK 前先看旧值的“结构”(2026-10-04 实测,值可从 DB 备份取)**: 实测老值是 **三个 `&` 段、每段只有 `pin=..;wskey=..;`**(pin 9/16/15 字符、wskey 各 96 字符,合计 366 字节)——**不含** `whwswswws`/`unionwsws` 等设备指纹 → **“pin+wskey”这个格式足够让 genToken 放行**(2026-10-02 三次成功用的就是它)。取法: `sqlite3 /ql/data/db/full_backup_<ts>.db "select value from Envs where id=20"`,脚本里**只解析并打印 cookie 名与长度**,别把值打出来。⚠️ 改 env 前先确认旧值覆盖几个账号(一脚踩过: 以为只配了一个,实际三个)。另: CK检测日志头部「共 N 个京东账号Cookie」数的是**启用中的 CK 条目**,不是 JD_WSCK 里的账号数。
+- **替换 JD_WSCK 前先看旧值的“结构”(2026-10-04 实测,值可从 DB 备份取)**: 实测老值是 **三个 `&` 段、每段只有 `pin=..;wskey=..;`**(pin 9/16/15 字符、wskey 各 96 字符,合计 366 字节)——**不含** `whwswswws`/`unionwsws` 等设备指纹 → **“pin+wskey”这个格式足够让 genToken 放行**(2026-10-02 三次成功用的就是它)。取法: `sqlite3 /ql/data/db/full_backup_<ts>.db "select value from Envs where id=20"`,脚本里**只解析并打印 cookie 名与长度**,别把值打出来。⚠️ 改 env 前先确认旧值覆盖几个账号(一脚踩过: 以为只配了一个,实际三个)。另: CK检测日志头部「共 N 个京东账号Cookie」数的是**启用中的 CK 条目**,不是 JD_WSCK 里的账号数。- **替换 JD_WSCK 前先看旧值的“结构”**: 实测老值是三个段，每段只有 `pin=..;wskey=..;`。严格校验 wskey 长度为固定 96 位；但注意区分网页版 pt_key（固定 75 位，格式也是 AAJq... 开头，直接填入 JD_COOKIE 即可用，并非截断的 wskey）。
 
 **同一个账号同一天被拒后不要再手动重试**(2026-10-04 实录: 14:28 拿旧 wskey 换得 `fake`(真失效) → 15:25 用用户当天新抓的 wskey 换得 `tokenKey=xxx`(连 genToken 都没过)) —— 后者**不能判定为新 wskey 有问题**,只是上游拒了这次请求;正确动作是**停手**,让日常任务(11:38 那次)自己试,或等 24-48h。另: 该脚本**只在失败时推通知**(`ql_send` 仅失败分支),成功不推 → “到底成功没成功”得自己去看日志/CK 状态。
 
@@ -408,6 +421,13 @@ jd_wskey.py 的 `appjmp()` 有两条失败分支,含义完全不同:
   - 要同时养多个号 → **每个号一台常驻登录设备**(旧手机/平板)最稳;只有一台手机就一次只养一个,并接受“切号会废掉上一个号的 App 会话”;
   - 抓完别点“退出登录”/改密码(同前)。
 - **`pt_key`(整份网页/App Cookie)实测比 wskey 抗切号**(2026-10-10 实测: 账号3 的 pt_key 是在用户切到账号1 之后写入的,18:25 与 18:34 两次 CK检测均「状态正常」)→ 抓不到 wskey、或被切号坑到反复失效时,**让用户直接发整份 Cookie,取 `pt_key`+`pt_pin` 写进 JD_COOKIE 立即生效、无需转换**(代价: 家宽换 IP 后仍可能失效)。
+- **网页版 pt_key vs App 转换 pt_key 的长度与形态差异**:
+  - 网页版 / H5 (`m.jd.com`) 导出的 `pt_key` 长度为 **75 位**（直接可用，直接带入 `Cookie: pt_key=...; pt_pin=...;` 即可通过验证）；
+  - App 接口换出的 `pt_key` 为 **83 位**（带 `app_open` 前缀）；
+  - 收到 75 位的 `AAJq...` 串不要误判为截断的 wskey，应优先探测试探是否为网页版 pt_key。
+- **多账号退回单账号运行时的彻底清理**:
+  - 当用户决定停用多余账号（只保留主号跑）时，**不能只禁用 `JD_COOKIE`**；
+  - 必须同时清理 `JD_WSCK`（id=20）里对应的已停用账号段，否则每天 11:38 的转换任务仍会继续拿已失效的 wskey 撞库报错并推送 Telegram 告警。清理后只留主号单段。
 - 脚本每次跑先测现有 JD_COOKIE:有效则跳过(不重复转换、不浪费请求),失效才换 —— 所以日志里同一账号时而报"转换成功"时而报"账号有效"都属正常
 - wskey 抓取本身也是账号授权操作,有风控风险 — cookie 刚被风控/触发过验证时缓几天再弄
 
@@ -417,6 +437,7 @@ jd_wskey.py 的 `appjmp()` 有两条失败分支,含义完全不同:
 
 三层根因 + 铁律:
 1. **换新 cookie 后禁止 `PUT /api/crons/run` 全量触发**(55 个脚本瞬间并发几十个接口=典型 bot 特征)。验证只单跑 CK 检测(2286),其余让任务按各自 schedule 自然跑——青龙本来就把时间错开了。
+   - **「常驻启用」同样不安全**：任务不用手动 run，按排期每天照样打出几十次请求；CK 一旦失效，这些请求全变成 403/401 失败日志，等于每天给风控标记续命。用户说「都开了吧」时**不要直接照做**——先只开 3 个高价值任务、说明「50+ 任务打在单账号上就是风控触发器」，跑稳 3–5 天再逐步加。全开前先备份 id 清单，随时能退回。
 2. **代理/IP 漂移是隐藏雷**: 调试软路由(PassWall/openbox)换出口 IP 会让京东给账号打风险标记,标记存在时新 key 遇任何异常流量(如全量并发)立即作废。京东域名已在 PassWall Direct 规则强直连防再漂移;「流量是否真走代理」的诊断法与加规则步骤 → 见 `references/passwall-proxy-diagnosis.md`。
 3. **触发面部识别/滑块验证 = 风控升级信号**: 立即停止一切登录/抓取操作,等 24-48h 让标记消退,别反复重抓(越抓越可疑)。
 4. **家宽动态 IP 是不定时炸弹(2026-09-11 实测确认)**: 北京联通 PPPoE 家宽每次重拨/路由重启都会换 IP(实际观测 123.114.192.101 → 111.194.59.132),京东对登录 IP 变化敏感,叠加风控观察期会把 cookie 作废。检查方法:路由器 `ifstatus wan` 看 IP + 与上次记录对比;应用侧 `docker exec qinglong curl -s https://myip.ipip.net`(国内回显服务,别用外国的会显示代理出口)。IP 不可控 → 正解是 **wskey 方案**(wskey 是 App 长期凭证,IP 变化导致 pt_key 失效后能自动换新,免人工重抓),青龙已有 jd_wskey.py/jd_wsck.py 任务,只差 JD_WSCK 环境变量(格式 wskey1&wskey2);手机抓包流程、工具选择与证书坑 → `references/jd-wskey-capture.md`。
@@ -502,9 +523,15 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - 现成脚本: `scripts/ql_stale_status.py`(纯 stdlib,`--check` 列残留 / `--fix` 自动部署修复脚本 + 跑临时任务 + 复核)。
 - 复核必须走 API 而不是只看库: `GET /api/crons` 的返回形状是 **`data.data[]` + `data.total`**(不是 data 直接为数组);看用户点名任务的 `pid` 是否 null、`status` 是否 0。
 
-## 「运行中」残留的真根因:令牌每日漂移 + 自愈任务 (2026-10-04 实测)
+## 「运行中」残留的真根因:令牌每日漂移 + 自愈任务 (2026-10-04 实测, 2.23.0 官方已治本)
 
-清完 `RunningInstances` 第二天又长出来时,别只怪“面板重启”——根因是: **面板每天 08:00 自换内部 system 令牌**(判据: `Apps.id=1 name=system` 的 `updatedAt` = 当天 `00:00:01 UTC` = 北京 08:00;`token.json` 的 `expiration` = 生成时刻 **+30 天**),但磁盘上的 `/ql/data/config/token.json` **不跟着更新** → 当天 08:00 之后每一个跑完的任务,结束回调 `PUT /open/crons/status` 全部 **401 且静默** → 每个完成的任务留一行 `status=1` 的假「运行中」。
+- **2.23.0 官方修复**: 官方在 2.23.0 修复了系统令牌主动续期与 Shell API 401 重试，日常 08:00 漂移问题已被官方在底层解决。自愈任务 2366 可退居二线保留作双保险。
+- **升级后存量清理**: 升级 2.23.0 之前遗留的 `status=1` 残留不会自动消失，仍需在 SQLite 中手工复位一次：
+  `UPDATE RunningInstances SET status=3, exit_code=0, finished_at=CURRENT_TIMESTAMP WHERE status=1;`
+  `UPDATE Crontabs SET pid=NULL WHERE pid IS NOT NULL;`
+- **远程管理标准推荐**: 2.23.0 起官方发布了 `@whyour/qinglong-cli` 与配套 Agent Skill `qinglong-cli`。除底层容器/SSH 维护外，日常任务调度、日志查阅、变量与订阅变更优先通过 `ql` CLI 执行。
+
+清完 `RunningInstances` 第二天又长出来时,别只怪“面板重启”——老版根因是: **面板每天 08:00 自换内部 system 令牌**(判据: `Apps.id=1 name=system` 的 `updatedAt` = 当天 `00:00:01 UTC` = 北京 08:00;`token.json` 的 `expiration` = 生成时刻 **+30 天**),但磁盘上的 `/ql/data/config/token.json` **不跟着更新** → 当天 08:00 之后每一个跑完的任务,结束回调 `PUT /open/crons/status` 全部 **401 且静默** → 每个完成的任务留一行 `status=1` 的假「运行中」。
 
 - **判令牌死活别看 expiration 字段**(实测文件里 expiration 还写着 11-02,认证却已 401)——唯一判据是**拿它打一次**:`TOK=$(python3 -c "import json;print(json.load(open('/ql/data/config/token.json'))['value'])")` → `curl -s -o /dev/null -w %{http_code} -H "Authorization: Bearer $TOK" http://127.0.0.1:5700/open/crons` → **200 活 / 401 已漂移**。
 - 令牌是**不透明 36 字符串**(不是 JWT,段数=1),别按 JWT 去解 payload。
@@ -529,7 +556,7 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - 二维码有 TTL,递给用户前现取一张新鲜的。
 - 上游仓库有 `明确过期凭据账号需重新扫码` 一类提交,说明这就是官方预期处置方式;容器镜像老(如 08-31 构建)时可顺带 `git pull` 重建,但重扫才是根治。
 
-**分享版脚本依赖在容器重建后会丢**: 捷停车报「JWT库错误」其实是 jwt 模块压根没装(`pip3 uninstall jwt` 会说 not installed)→ 装 `pyjwt`;其余自检依赖 `httpx[http2] httpx-socks python-dotenv pycryptodome` 一并 `pip3 install ... -i https://pypi.tuna.tsinghua.edu.cn/simple`。装完仍 502 = YYB-Go 账号问题,不是依赖。
+**分享版脚本依赖在容器重建后会丢**: 捷停车报「JWT库错误」其实是 jwt 模块压根没装(`pip3 uninstall jwt` 会说 not installed)→ 装 `pyjwt`;NodeSeek 签到报 `ModuleNotFoundError: No module named 'curl_cffi'` 同理。青龙容器升级/重建（如升至 2.23.0）会重置系统级 site-packages，需一并补齐：`docker exec qinglong pip3 install pyjwt "httpx[http2]" httpx-socks python-dotenv pycryptodome curl_cffi -i https://pypi.tuna.tsinghua.edu.cn/simple`，并在 `Dependences` 表（type=1）中补增记录。装完捷停车仍 502 = YYB-Go 账号问题,不是依赖。
 
 ## Pitfalls
 
@@ -549,3 +576,4 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - `references/security-audit.md` — 青龙安全审计三步法(版本/暴露/入侵痕迹) + 2.20.2 红线含义 + 重装保数据事实 + 本机基线(2026-09-01)
 - `scripts/ql_stale_status.py` — 「运行中」残留体检/复位(无需宿主机 ssh): 列出 `pid` 非空或 `status=0`(运行中)的行,`--fix` 则在容器内逐行 `/proc/<pid>` 验活、备份 DB、把"进程已不存在"的行复位成 `status=1`(该任务启用)/`2`(该任务停用)+`pid=NULL`,并打出后续必做项(硬刷页面/删临时任务)
 - `scripts/ql_env_segment.py` — env 分段写入助手(纯 stdlib,凭证不回显): `--show` 只看 pin/长度结构、`--add 'pin=..;wskey=..;'` 按 pin 增/换某账号段、`--value` 整值覆盖;写前打旧结构、写后回读复核
+- `scripts/jd_ck_probe.py` — 写进 `JD_COOKIE` **之前**预检一条 JD 凭证: 从容器内打 `me-api` 判 200/1001,顺带识别 75 位网页版 vs 83 位 `app_open` App 版形态(互加前缀必失败),全程不打印凭证本体
