@@ -161,6 +161,30 @@ google/youtube/baidu 全 200。
 - 脚本下发不能带 CRLF：Windows 上 python `write_text` 默认把 `\n` 写成 `\r\n`，ash 报
   `syntax error: unexpected word (expecting "do")`。用 `open(..., newline="\n")`，或写完后 `sed -i 's/\r$//'`。
 
+### 真正根因(2026-10-23 定案)：iStoreOS 开机把 `/lib/system.mark` 行注入到内嵌 Lua 里
+
+- `/lib/system.mark` 是 iStoreOS 自带的 Go 标记程序，它会把自己的路径作为一行写进**全系统 init 脚本**
+  （该机 46 个 `/etc/init.d/*` 都有这行），而且**每次开机重新注入**（10:41 手工清成 0，10:42:50 开机后又是 3 处）。
+- 在 `/etc/init.d/passwall` 里它有一个落点**在内嵌的 `lua -e '...'` 字符串内部** → lua 报
+  `unexpected symbol near '/'` 而**退出码 = 1** → `restart()` 的 `for i in $(seq 1 300)` 把 1 当成“锁被占用”，
+  空转 300×2s = **600 秒，全程掮着 `/tmp/lock/passwall.lock`** → 期间任何 start 都只打“已经在运行”。
+  所以现象是“卡 10 分钟”而不是永久（但已足够让你以为服务死了）。
+- 这解释了两件事：① 10-19 那次“删掉一行”只是**一次性**处理，下一次开机注入器又写回来 → 所以“怎么又犯了”；
+  ② 当时看到的“TCP 未运行”与今天的死锁是**同一个机制**，只是当时没查到注入源。
+
+**治本三件套（已落地，且真重启实测通过）：**
+1. `/root/passwall-init-guard.sh`：删除 init 里 `^/lib/system.mark$` 行 + `sh -n` 校验。
+2. `/etc/rc.local`（S95，**早于 S99passwall**）调用它 → 开机注入之后再清、passwall 启动之前 → 正好卡在窗口内。
+3. `passwall-watchdog.sh` 每 5 分钟也调一次（防运行期再注入）+ 原有掉线修复。
+4. 附带 `uci set passwall.@global_delay[0].start_delay=10`（原 60）。
+
+**重启实测（2026-10-23 10:42）：** `10:42:50 guard 已清掉注入行` → `10:42:55 执行启动延时 10 秒后再启动!`
+→ `10:43:07 启动`、`10:43:09 运行完成!` → sing-box/chinadns-ng 正常、google/youtube/baidu=200、
+`/tmp/lock/passwall_ready.lock` 生成，**看门狗全程未出手**。
+
+判定“好没好”三条硬指标：① `grep -c "system.mark" /etc/init.d/passwall` = **0**；
+② `/tmp/lock/passwall_ready.lock` 存在；③ 开机后 ≤30s 内 `pidof sing-box` 有值。
+
 ## 批量更新软件包(2026-09-28 实测:62 可更新 → 实升 42)
 
 ```sh
