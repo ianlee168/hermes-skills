@@ -9,14 +9,16 @@ tags: [istoreos, openwrt, passwall, opkg, ttyd, router, websocket]
 metadata:
   hermes:
     tags: [istoreos, openwrt, passwall, opkg]
-    triggers: ["passwall 升级", "ipk 转 run", "istore run 格式", "passwall 26.8", "iStoreOS 更新插件", "ttyd 无法输出", "ttyd websocket 协议", "ttyd 没有输出"]
+    triggers: ["passwall 升级", "ipk 转 run", "istore run 格式", "passwall 26.8", "iStoreOS 更新插件", "ttyd 无法输出", "ttyd websocket 协议", "ttyd 没有输出", "passwall tcp未运行", "脚本已经在运行，不重复运行", "passwall 启动死锁"]
 ---
 
-# iStoreOS PassWall 升级 & ipk/run 问题
+# iStoreOS PassWall 升级 & 排错运维
 
 ## When to Use
 
 - 用户问 PassWall 怎么升级 / 提示"暂不支持自动更新" / 看到版本号 `26.x.y`
+- 用户反馈 PassWall 面板提示「TCP 未运行」或日志死循环「脚本已经在运行，不重复运行，退出」
+- 透明代理断网修复后，手机端（Google Play 商店等）依然提示「请重试」
 - 用户问 ipk 能不能转成 iStore 的 .run 格式(答案:不需要,本地安装原生支持 ipk)
 - 需要通过免密网页终端(ttyd)操作路由器,或 ttyd 连上但收不到输出
 - 需要在 Windows 侧无 sshpass 时做密码 SSH 登录
@@ -116,6 +118,48 @@ tail -12 /tmp/pw-install.log
   新版存为 `*-opkg`。不要拿新版去覆盖用户的(用户的域名清单才是他要的)。
 - 验证三件套:`opkg list-installed | grep passwall` + `/etc/init.d/passwall enabled` +
   `curl -o /dev/null -w "%{http_code}" https://www.google.com`(经代理应 200)。
+
+## 开机后 PassWall 不启动，日志只有“脚本已经在运行，不重复运行，退出”(2026-10-23 实测)
+
+症状：重启后 TCP 代理全断（`google=000`、`baidu=200` 直连正常），面板点启动也没用；
+`/var/log/passwall.log` 只有：
+```
+10:20:53: 执行启动延时 60 秒后再启动!
+10:22:32: 脚本已经在运行，不重复运行，退出.
+```
+进程里 `{S99passwall} /bin/sh /etc/rc.common /etc/rc.d/S99passwall boot` 一直挂着，
+`/proc/<pid>/fd/9 -> /tmp/lock/passwall.lock`（**它自己掮着 flock**），wchan=do_wait；
+`/tmp/lock/passwall_ready.lock` 不存在 = 本次开机 boot 没走完。
+
+机制：`/etc/init.d/passwall` 的 `boot()` 把 `boot_func` 丢后台：读 `uci get passwall.@global_delay[0].start_delay`
+（该机 60）→ `sleep` → `restart boot`；`restart` 先 `set_lock`（flock fd9）再跑 `app.sh stop/start`。
+这条链一旦卡住（开机 DNS/网络未就绪、dnsmasq、订阅锁），**锁永不释放而且脚本没有任何超时**，
+之后每次 `start` 只打一句“已经在运行”就 **return 0** —— 静默失败，看上去像“服务自己不在”。
+
+现场处置（30 秒）：
+```sh
+# 1) 找出掮锁进程并杀（杀进程 = 释放 flock）
+for d in /proc/[0-9]*; do for f in $d/fd/*; do [ "$(readlink $f)" = /tmp/lock/passwall.lock ] && echo ${d#/proc/}; done; done
+kill -9 <pid>
+# 2) 正常启动 + 验证
+/etc/init.d/passwall start; sleep 15; pidof sing-box
+curl -s -o /dev/null -w "google=%{http_code}\n" --max-time 10 https://www.google.com
+```
+
+长效防复发（已在该机落地）：`/root/passwall-watchdog.sh` + `*/5 * * * * /bin/sh /root/passwall-watchdog.sh`
+- `pidof sing-box` 有 → 直接退出（不产生日志噪音）
+- 否则看 `/tmp/etc/passwall/acl/default/global.json` 的 mtime：<180s = 正在启动，等下一轮
+- >180s 或文件不存在（刚开机 /tmp 被清）→ 杀掉持有 `/tmp/lock/passwall.lock` 的进程 → `passwall start`
+  → 20s 后复查，结果写 `/tmp/passwall-watchdog.log`（超 800 行原地截断）
+
+造故障实测：`kill -9 $(pidof sing-box)` + `touch -t` 把 global.json 改老 → 跑脚本 → **29 秒后 `repaired OK`**，
+google/youtube/baidu 全 200。
+
+两个坑：
+- **别用 `pgrep -f "passwall/bin/sing-box"` 判活**：agent 通过一条 ssh 命令跑脚本时，整条 ssh 命令的 cmdline
+  里就含这个字符串，`pgrep -f` 会匹配到自己 → 脚本误判“服务还在”什么都不做。用 `pidof sing-box`（按进程名）。
+- 脚本下发不能带 CRLF：Windows 上 python `write_text` 默认把 `\n` 写成 `\r\n`，ash 报
+  `syntax error: unexpected word (expecting "do")`。用 `open(..., newline="\n")`，或写完后 `sed -i 's/\r$//'`。
 
 ## 批量更新软件包(2026-09-28 实测:62 可更新 → 实升 42)
 
@@ -316,6 +360,62 @@ grep -c "23.05-24.10_.*\.ipk" /tmp/pw-api.json      # 0 ⇒ 面板必然报"更�
 ```
 **同时确认 GitHub release 页面上的 ipk 是齐的**(直下 858232 字节正常)⇒ 上游 api-cache 快照缺 ipk,
 不是路由器/网络问题。结论:面板更新器在非 apk 固件(iStoreOS 24.10)上走不通,**继续走本文的手动 ipk 流程**。
+
+## ⚠️ PassWall 启动死锁：「TCP 未运行」与「脚本已经在运行，不重复运行，退出」排查
+
+### 症状
+- 网页面板提示「TCP 未运行」，`pgrep -af "sing-box|xray"` 查不到核心进程。
+- `/var/log/passwall.log` 显示 `执行启动延时 XX 秒后再启动!`，之后频繁刷新 `脚本已经在运行，不重复运行，退出.`。
+- `ps w` 能看到残留的 `{S99passwall} /bin/sh /etc/rc.common /etc/rc.d/S99passwall boot` 或 `sleep 2`，且 `/var/lock/passwall.lock` 处于 `flock` 锁定状态。
+
+### 根因与排查命令
+1. **Lua 块语法污染**：固件补丁或工具可能向 `/etc/init.d/passwall` 注入标记（如 `/lib/system.mark`）。如果误注入到了 `restart()` 函数内部的 `lua -e '...'` 多行字符串中，会导致 `lua` 解释器报错 `unexpected symbol near '/'`。
+2. 解释器报错导致锁状态检测代码异常退出，`update_status` 陷入循环 300 次（600 秒）或直接挂死，持锁进程无法释放 `/var/lock/passwall.lock`，后续所有 `start/restart` 都因 `set_lock` 失败而退出。
+3. 检查命令：
+```sh
+# 检查 init 脚本语法
+sh -n /etc/init.d/passwall
+# 检查 restart 函数中 lua 块内是否混入了非法行（正常应纯净仅包含 require "nixio" 等）
+sed -n '55,85p' /etc/init.d/passwall
+# 检查持有 passwall.lock 的进程
+for p in /proc/[0-9]*; do ls -l $p/fd 2>/dev/null | grep -q "passwall.lock" && echo "PID: ${p#/proc/} $(tr '\0' ' ' < $p/cmdline)"; done
+```
+
+### 修复步骤
+```sh
+# 1. 备份并剔除非法行（例如删除误入 lua 块的 mark 行）
+cp /etc/init.d/passwall /etc/init.d/passwall.bak-$(date +%Y%m%d%H%M)
+# 修复脚本后校验语法
+sh -n /etc/init.d/passwall && echo "SYNTAX_OK"
+
+# 2. 杀掉卡死的老 boot 进程并清除死锁文件
+pkill -9 -f "S99passwall"
+pkill -9 -f "sleep 2"
+rm -f /var/lock/passwall.lock /var/lock/passwall_sub_rule.lock
+
+# 3. 后台重启（必须 nohup + 分步验证，避免 SSH 被防火墙重载打断）
+nohup sh -c "/etc/init.d/passwall restart > /tmp/pw-restart.log 2>&1" >/dev/null 2>&1 &
+sleep 25
+
+# 4. 验证服务与分流
+pgrep -af "sing-box|xray|chinadns"
+curl -s -o /dev/null -w "%{http_code}\n" https://www.google.com   # 应为 200
+```
+
+---
+
+## ⚠️ 透明代理恢复后，手机端（Google Play 商店等）依然提示「请重试」
+
+### 原因
+1. **应用进程缓存了网络故障**：Android 系统与 Google Play 商店（`com.android.vending` / Google Play 服务）在断网期间遭遇超时后，界面与连接组件会驻留「不可用」状态，即使透明代理链路已通，也不会自动静默刷新页面。
+2. **移动端本地 DNS 缓存**：断网期间手机可能缓存了解析失败或被污染的 DNS 记录（TTL 内有效）。
+
+### 恢复步骤
+1. **多任务划掉杀进程**：在手机后台划掉 Google Play 商店，或进入应用设置点击「强行停止」。
+2. **开关飞行模式**：手机开关一次飞行模式，强制刷新系统的 DNS 解析缓存并重建网络连接。
+3. **重新打开**：重新点开 Google Play 商店即可正常秒开。
+
+---
 
 ## 环境备忘(50.110 实测)
 
