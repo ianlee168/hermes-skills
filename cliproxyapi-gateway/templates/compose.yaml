@@ -1,0 +1,14 @@
+# CLIProxyAPI + CPAMC —— 改 <APP_DIR> 后 docker compose up -d
+# 落点必须在合并视图(/mnt/user/appdata),不要 /mnt/cache
+services:
+  cli-proxy-api:
+    image: eceasy/cli-proxy-api:latest
+    container_name: cli-proxy-api
+    ports:
+      - "8317:8317"
+    volumes:
+      - <APP_DIR>/config.yaml:/CLIProxyAPI/config.yaml
+      - <APP_DIR>/auths:/root/.cli-proxy-api    # OAuth 授权文件落这里
+      - <APP_DIR>/logs:/CLIProxyAPI/logs
+      - <APP_DIR>/plugins:/CLIProxyAPI/plugins
+    restart: unless-stopped

@@ -34,6 +34,7 @@
 | `qinglong/` | 50.110 Windows bot | 青龙面板（50.1 docker）运维：API 形状坑、DB 直写姿势、订阅管理、第三方签到脚本（qlhub 类）部署、从全站 cookie 转储里扒单站 cookie；内网 IP 保留，凭证只在 gbrain |
 | `microsoft-rewards-signin/` | 50.110 Windows bot | 微软 Rewards 自动签到容器（50.1 docker，chiihero/Microsoft-Rewards-Script）：稳妥版配置只留签到/领分/连击、`.env` 改后必须 `docker compose up -d --force-recreate`、登录失败/临时锁处置、**故障模式：FIDO/passkey 拦截 → “应用活动被跳过” → 签到消失（含判据与处置）**、日报判定式与“❌ 未见签到记录”的假阳性坑；凭据只在 gbrain |
 | `bbs-techtreehole/` | 50.161 webui-hermes bot | bbs.techtreehole.com 论坛运维：NodeBB 4.16.2 部署升级、Resend SMTP 发信、Lucky 反代；凭据只在 gbrain，仓内零明文 |
+| `cliproxyapi-gateway/` | 50.110 Windows bot | CLIProxyAPI 网关 + CPAMC 面板运维：v8 配置布局、上游 base-url 必须裸域名、`auth-files` vs `api-keys` 两套凭证别混、配额来源是 OAuth 账号不是 AI Studio free key、管理密钥问一次 `gbrain get tools/<app>-<host>` 就够（别先通读 skill 再走验证阶梯）；内网 IP 保留，凭证只在 gbrain |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
