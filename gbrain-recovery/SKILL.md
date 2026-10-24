@@ -18,7 +18,7 @@ description: gbrain 记忆系统完全恢复流程 — 任何 IP、任何机器�
 
 ```bash
 # 任何 bot 失忆只跑这一条（注意 -k 绕 lucky 证书）
-curl -ksS -o brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz" && \
+curl -ksS -u "ianlee:$GBRAIN_BACKUP_PW" -o brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz" && \
 tar -xzf brain.tar.gz -C ~/ && \
 cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor 2>&1 | grep -E "score|page"
 # 期望输出: "Weighted brain score: Brain score 87/100"
@@ -37,7 +37,7 @@ cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor 2>&1 | grep -E "score|page"
 **主路径（强烈推荐）：**
 ```bash
 # 注意 -k：lucky 证书是 bbs 的通配符，扩展不覆盖 backup 子域
-curl -ksS -o /tmp/brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz"
+curl -ksS -u "ianlee:$GBRAIN_BACKUP_PW" -o /tmp/brain.tar.gz "https://backup.techtreehole.com:16666/gbrain-latest.tar.gz"
 # tar.gz 内部顶层目录是 brain.pglite/，解到 $HOME 自动建好
 tar -xzf /tmp/brain.tar.gz -C ~/
 # 脑数据最终在: ~/brain.pglite/ (PGLite 17 格式)
@@ -165,6 +165,9 @@ cd ~/.hermes/skills/gbrain && bun src/cli.ts doctor
 
 **记住**：
 - 主路径 = `https://backup.techtreehole.com:16666/gbrain-latest.tar.gz`
+> ⚠️ **2026-10-24 起该 URL 需要 HTTP Basic 认证**（原来零认证 + `file_server browse`，而脑库里存着全部明文凭据，等于公开所有密钥）。用户名 `ianlee`，密码只在 gbrain `credentials/gbrain-backup-http-auth` 与机器本地文件里，**不在本仓库**。
+> 用法：先 `export GBRAIN_BACKUP_PW=<向维护者索取>` 再跑下面已带 `-u` 的 curl；未认证 → 401。
+
 - 任何 IP 任何机器都跑同一份
 - 陛下设计这份 skill 时坚持**零硬编**——别假设环境，先 `uname -a` / `ls` 看本机
 
