@@ -263,11 +263,31 @@ ssh "$h" 'docker stop cpa-basetest'                                             
 
 ## 坑
 
+- **桌面端新窗口「显示 gemini、一问就变 deepseek」= provider 解析不出端点，不是网关坏了**。
+  机制：桌面新会话只发裸 `provider='custom'`（不带端点/key），后端的 ladder 只有在
+  `model.provider` 是 `custom`/`auto`/loopback 时才肯用 `model.base_url` 兜底 → 否则整条 ladder 落空，
+  `_raise_for_credentialless_bare_custom` 抛 AuthError，接着按 `fallback_providers` 掉到 deepseek。
+  **`model.provider: cpa`（裸 named 名）正好踩这个洞**：显式请求 `cpa`/`custom:cpa` 都能解析，唯独裸 `custom` 不行。
+  诊断顺序：`grep "Primary provider auth failed" logs/errors.log`（会写明 `provider 'custom'`）→
+  `python -c "from hermes_cli.runtime_provider import resolve_runtime_provider as r; print(r(requested='custom'))"`
+  在 `hermes-agent/` 目录复现，比开浏览器看网关快得多；网关侧再用 `/v1/chat/completions` 直测一次证明上游正常。
+  修法（实测四形态全通）：`hermes config set model.provider custom` +
+  `hermes config set model.base_url http://<host>:8317/v1`（key 会自动借 `providers.<name>.api_key`，不用另填）；
+  `providers.cpa` 条目保留给 MoA/显式 `--provider cpa` 用。config 有文件签名缓存，gateway 进程会热读，
+  但**已经跑着的会话不会自愈**——要么新开窗口，要么重启桌面 app。
 - **`management.secret-key` 写明文会在启动时被 bcrypt 哈希后写回 config.yaml**（`$2a$…`）。发给管理接口的
   仍然是**明文**；别去"修"文件里那串哈希，也别因为看到哈希就以为明文失效了。
 - **`management.allow-remote` 默认 false，只放行 localhost**：从别的机器打管理接口失败时先看这一项，
   跟密钥对不对无关。
 - **管理密钥连错 5 次 → 该 IP 封约 30 分钟**，所以核对密钥别凭记忆重打，也别拿猜的值去试公网入口。
+- **这 5 次限制是按「程序看到的来源 IP」记账的，经反代进来时那是反代的局域网 IP**：Lucky 转发后的请求在
+  `docker logs` 里一律显示网关地址（如 `192.168.50.5`），既查不到真实访客，也意味着**外人瞎试 5 次被锁 30 分钟的是
+  你自己、而且能续封**。所以面板一旦暴露公网，这 5 次限制**不能当防线**，要上反代层白名单或后端认证
+  （见 `lucky-reverse-proxy`）；同理，别拿日志里的 IP 当「谁在从外网用网关」的证据 —— 公网与局域网直连混在同一份日志里。
+- **用户问「这么复杂的密钥不会被破解吧」时的答法**：先用熵给出结论（32 字符 url-safe base64 = 192 bit，
+  10¹² 次/秒也要 10³⁷ 年级别），再补一句「真正的风险不是猜，是泄露面」，并**当场把暴露面扫一遍**：
+  同一公网端口上还挂了哪些站点、有没有零认证后台/文件服务、这条 URL 是否写在公开仓库里。
+  只回「不会」是漏答 —— 用户要的是安全判断，不是安慰。
 - **明文已经取不回 config.yaml**：启动后那一行是 bcrypt 哈希，
   `sed -nE 's/^ *(secret-key)[: ]+(.*)$/\2/p' config.yaml` 只会吐出 `$2a$10$…`，哈希不可逆。明文的可靠来源只有两处：
   `gbrain get tools/cliproxyapi-cpamc-50.1` 的「凭据」段、和本机 `mgmt-key.txt` / `credentials.txt`。
