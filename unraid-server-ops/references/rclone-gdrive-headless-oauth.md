@@ -71,3 +71,25 @@ Verify: `ssh root@192.168.50.1 "rclone lsd gdrive:"` shows the user's Drive root
 - WSL authorize: `proc_6f19a68f3745` (waiting for browser callback)
 - Auth URL given to user: `http://127.0.0.1:53682/auth?state=C2dIp-6Aowu59YlgSIjDGQ`
 - Next step: user authorizes → paste token → verify `rclone lsd gdrive:` → upload.
+
+## Google Photos (`gphotos`) Remote Setup & Traps
+
+Setting up rclone with Google Photos (`type = google photos`) differs fundamentally from Google Drive:
+
+1. **Shared Client ID Quota Trap (429 Error)**:
+   Unlike Google Drive, Google's `photoslibrary.googleapis.com` imposes a strict shared daily upload volume quota on rclone's default public client ID (`project_number:202264815644`). Uploading with the default client ID fails with:
+   `429 Too Many Requests: Quota exceeded for quota metric 'Size of uploads' and limit 'Size of uploads per day'`
+   **Remedy**: You must configure a custom OAuth Client ID.
+   - Go to Google Cloud Console -> APIs & Services -> Library -> enable `Photos Library API`.
+   - Go to Google Auth Platform -> "客户端 (Clients)" -> Create Credentials -> "OAuth 客户端 ID" -> Application type: **桌面应用 (Desktop app)**.
+
+2. **Publishing Status: Production (正式版) vs Testing (测试版)**:
+   - In Google Auth Platform -> "目标对象 / 受众 (Audience)":
+   - **Never downgrade to Testing (测试版)** for headless server automations. In Testing mode, Google OAuth **refresh tokens expire in 7 days**. The NAS automation will break weekly and require manual browser re-authorization.
+   - In **Production mode (正式版)**, refresh tokens remain valid **indefinitely** (unlimited duration for personal unverified apps up to 100 users). When authenticating, users may see "Google hasn't verified this app" — click Advanced -> Proceed to [App] (unsafe).
+
+3. **`gphotos:upload` is Write-Only**:
+   - `rclone lsf gphotos:upload` returns `directory not found` because `upload` is a virtual write-only target.
+   - Photos uploaded to `gphotos:upload` are ingested into the Google Photos timeline, but cannot be queried or checked for existence via `lsf`.
+   - Automated scripts must maintain a local ledger (append-only file or SQLite table) of uploaded files to prevent resending existing photos.
+

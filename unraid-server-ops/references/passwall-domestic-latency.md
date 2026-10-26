@@ -7,7 +7,7 @@
 
 ```bash
 ssh -p 64891 -o ConnectTimeout=8 -o BatchMode=yes -i ~/.ssh/id_ed25519 root@192.168.50.5 '...'
-# 凭证在 gbrain concepts/net-topology（密码 见 gbrain concepts/net-topology，密钥免密已配）
+# 凭证在 gbrain concepts/net-topology（密码 R4e3w2q1，密钥免密已配）
 ```
 
 ## 诊断阶梯（按序）

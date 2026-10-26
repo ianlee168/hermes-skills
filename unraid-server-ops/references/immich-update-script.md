@@ -145,15 +145,19 @@ containers):
 mkdir -p /tmp/immich-sb/bin && printf '#!/bin/sh\necho "[STUB docker] $*"\nexit 0\n' > /tmp/immich-sb/bin/docker && chmod +x /tmp/immich-sb/bin/docker
 # copy .env + compose into the sandbox, rewrite the script's cd line, then:
 PATH=/tmp/immich-sb/bin:$PATH bash script.sh    # scenario A: .env=v3.2.0 -> edit path; B: =latest -> Already on
+# failure branches need a stub that can fail: counter file + `exit 1` while $N <= ${STUB_FAIL_TIMES:-0}
+STUB_FAIL_TIMES=1  PATH=/tmp/immich-sb/bin:$PATH bash script.sh   # retries once, then completes (exit 0)
+STUB_FAIL_TIMES=99 PATH=/tmp/immich-sb/bin:$PATH bash script.sh   # 5 attempts, exit 1, `up -d` never runs
 ```
 
 Both scenarios passed on 50.1 (A: `current=v3.2.0 latest=v3.2.4` → files updated, Z5 line re-added;
 B: `Already on v3.2.4`). DB is small (239M) — a `pg_dumpall | gzip` pre-migration safety net costs ~44M
 and 30s, worth it before any Immich version bump.
 
-## Current script (v3.0, deployed 2026-10-02)
+## Current script (v3.1, deployed 2026-10-08)
 
 `/boot/config/plugins/user.scripts/scripts/immich update/script` — parse via `sed -nE` + redirect fallback,
-`--max-time` on every curl, `docker compose pull || exit 1` before `up -d`, `docker compose ps` at the end.
+`--max-time` on every curl, **`docker compose pull` retried 5×20s** before `up -d` (never go back to a bare
+single-shot `pull || exit 1`: any registry hiccup then becomes a half-applied upgrade), `docker compose ps` at the end.
 Keep the trailing `Z5` re-add block (`sed -i '/\/etc\/localtime/a\ ...'`) — the upstream compose file does
 not carry that mount, and `grep -q 'Z5'` guards it against duplicates.

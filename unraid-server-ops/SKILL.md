@@ -1,6 +1,6 @@
 ---
 name: unraid-server-ops
-description: Use when an Unraid user script fails or half-runs.
+description: Use when installing a Docker app on Unraid or a container/NAS job breaks.
 ---
 
 # Unraid Server Ops — User Scripts & Docker debugging
@@ -83,6 +83,19 @@ docker inspect <container> --format '{{range .Mounts}}{{.Source}} -> {{.Destinat
 ```
 
 Always check mounts FIRST before assuming where config/data lives — the path the user thinks a container uses may be wrong (split-brain section below).
+
+## 装一个新应用(上游只给镜像/compose)→ Unraid 原生容器
+
+顺序:摸底 → 建目录+改属主 → 后台拉镜像 → `docker run` + 写模板 + 挂自启 → 用应用自己的体检命令验收。
+完整脚手架(模板 XML 骨架、验收阶梯、媒体库路径映射实例)见 `references/new-docker-app-install.md`。
+
+- **先摸底四件事**:`netstat -tlnp | grep :<port>`、`ls -la /dev/dri/` + `getent group video render`(核显转码要知道 `renderD*` 的组号)、`docker ps -a`、`grep shareUseCache /boot/config/shares/*.cfg` + `df -h /mnt/cache`。**大数据目录只能放 `shareUseCache="no"` 的阵列共享**;放进 cache=yes 的共享会重演"cache 被写满 → QEMU 自动 pause"。
+- **`/data` 一律 bind 到 `/mnt/user/appdata/<app>`,不要用 docker named volume** —— 卷在 `docker.img` 里,既不在 appdata 备份范围,盘满时又是最先炸的那个。建完 `chown -R 1000:1000`,本机镜像普遍以 UID 1000 运行(宿主上显示成 `ianlee168:1000` 属正常)。
+- **大镜像拉取用后台 + 轮询,别在前台等**:`nohup docker pull <img:tag> > /tmp/<app>-pull.log 2>&1 &`。非 tty 的 pull 日志**每层下载完才打一行**,几分钟没有新行是正常的大层下载 —— 判活用 `du -sm /var/lib/docker/tmp`(持续增长=在动)+ `pgrep -f "docker pull"`(还在=没死)。等之前先算总量:registry manifest 的 `"size"` 求和(压缩后),再按实测速率估时间。
+- **`docker run` 起容器的同时写模板**,容器才在 Docker 页里可管理:模板路径 `/boot/config/plugins/dockerMan/templates-user/my-<Name>.xml`(`<Container version="2">` + `<Config Type="Port|Path|Device|Variable">`)。只 `docker run` 不写模板 = Docker 页里是 orphan。
+- **自启文件 `/var/lib/docker/unraid-autostart` 是文本文件(一行一个容器名),不是目录** —— `grep -q "^Name$" /var/lib/docker/unraid-autostart || echo Name >> /var/lib/docker/unraid-autostart`。
+- **验收必须跑应用自己的体检命令**(`doctor` / `status` / 自家的 scan),不能只看 `docker ps` 的 healthy —— 健康检查只证明端口活着,不证明挂载与路径映射是对的。
+- **Windows 侧验共享用 NetBIOS 名 `//Ians/<share>`**(凭据已存);`//192.168.50.1/<share>` 报 Permission denied 是客户端拒绝 guest 认证,**不代表服务端配错** —— 两个都失败才去查 smb 配置。
 
 ## Debugging workflow (in order)
 
@@ -400,17 +413,17 @@ Measured from the server's domestic broadband (download fine, upstream throttled
 
 ## Local LAN backup — rclone SFTP pull to the Windows host (2026-08-06, THE working route for big data)
 
-The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\ianle\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
+The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
 
 ```bash
-rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/ianle/.ssh/id_rsa"
+rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/<user>/.ssh/id_rsa"
 rclone lsd unraid:/mnt/cache/                 # verify
 rclone copy unraid:/mnt/cache/appdata "F:/unraid-backup/appdata" --stats 15s -v
 rclone copy unraid:/mnt/cache/domains "F:/unraid-backup/domains" --stats 30s -v   # big one
 ```
 
 - **Speed ~64-71 MiB/s** (gigabit LAN incl. SSH overhead) → 287G ≈ 75 min. qBittorrent `ipc-socket` errors (`SSH_FX_FAILURE`) are normal — runtime socket, not a real file; ignore.
-- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/ianle/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
+- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
 - **Sparse-file caveat**: SFTP backend has no sparse handling — a vdisk tree that `du`s 357G but is logically 664G transfers as 664G. F: drive must fit LOGICAL size; ETA ≈ 2.5-3h, not 1.2h.
 - **Consistency**: copying a RUNNING VM's vdisk = hot copy (restore may need fsck). Clean backup = stop VM → re-run `rclone copy` (incremental, only the delta, minutes) → start VM. NEVER stop `openwrt` if it is the soft-router — the whole LAN dies.
 
@@ -457,7 +470,7 @@ Key facts:
 - `mount -o ro` FAILS on ext4 with a dirty journal → add `noload` (mount then shows `type ext4 (ro,...,norecovery)`).
 - openwrt root = overlayfs: read-only squashfs (another partition) + writable `upper/` on ext4. Configs are in `upper/etc/config/`; `upper/etc` ≈ 65M, tar.gz ≈ 30M (includes plugin data). The overlay structure (`upper/`/`work/` + `.rootfs-uuid`) is what you see mounted — the configs are NOT at `/etc/` of the mount.
 - qcow2 overlay chain (base + delta, e.g. `istore_fixed.20260511_Stable_Baseqcow2` + `istore_fixed.qcow2`) is handled transparently by `qemu-img convert`.
-- iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 <见 gbrain concepts/net-topology>**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
+- iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 R4e3w2q1**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
   ⚠️ **50.5 的访问凭证（SSH 端口/密钥/密码）、HA 备份密码、小米账号等都在 gbrain `concepts/net-topology` 页面（2026-08-12 用户批准存脑）—— 问用户要密码之前先查脑库！**（2026-08-14 用户亲训："昨天不是告诉你50.5的密码了吗？怎么又问"）
 
 ## passwall 国内延迟排查（2026-08-14 实测，全链路结论：系统正常）
@@ -491,12 +504,12 @@ Watchdog (installed 2026-08-12): `/boot/custom/scripts/go2rtc-watchdog.sh` runs 
 - **新形态:重启 go2rtc 也没用**。日志反复 `cs2: pop buffer is full` + `probe: miss: read media: ... i/o timeout`(TCP 能连上摄像头 192.168.50.66,但 P2P 媒体读不到)= **摄像头端 P2P 会话卡死**,不是凭据 401。排查顺序:
   1. `docker logs --since 6m go2rtc | grep -iE "xiaomi|401|i/o timeout|buffer"` 区分 401(凭据)vs i/o timeout(摄像头端会话)
   2. 先让用户**重启摄像头**(拔电 10 秒 / 米家 App),重置 P2P 会话
-  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"<小米账号>": "<见 gbrain>"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
+  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"1291104493": "q1w2e3r4"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
 - ⚠️ **PITFALL:WebUI 保存/登录会重写 go2rtc.yaml 并清空 `streams:` 节**(实测:登录后配置文件只剩 14 行,cw300 定义丢失 → 流全断,快照冻结)。**WebUI 操作前必须 `cp go2rtc.yaml go2rtc.yaml.bak-$(date +%Y%m%d-%H%M%S)`**,操作后核对 streams 节,丢了就从备份补回:
   ```yaml
   streams:
     cw300:
-      - "xiaomi://<小米账号>:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
+      - "xiaomi://1291104493:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
   ```
   然后 `docker restart go2rtc`。注意 URL 里的 `&` 在 sed append 文本里无需转义,在替换串里要写成 `\&`。
 - **验证要过硬(2026-08-27 教训,用户原话"修好的p啊")**:快照字节数相同 ≠ 恢复(冻结帧可能返回完全相同字节,51KB 两次一致是假象)。**唯一硬证据 = `curl -s http://127.0.0.1:1986/api/streams`**,producer 显示 `remote_addr: 192.168.50.66:<port>` + `bytes`/`packets` 持续增长 + 最近 2 分钟 401 计数为 0,才宣布恢复。
@@ -533,6 +546,59 @@ chown -R 100:101 /mnt/user/appdata/<app>/data            # 宿主机上改属主
 ```
 
 教训: 容器起不来先 `docker logs` 看真实报错;SQLite 报 14 优先怀疑挂载目录属主,别往内存/磁盘方向查。
+
+## Docker 镜像盘写满排查 (docker.img 70%+ warning)
+
+症状: Unraid 告警 `Warning [IANS] - Docker image disk utilization of 71%`，`/mnt/user/system/docker/docker.img` 接近写满。
+
+### 诊断梯子（严禁直接跑 `docker system df` — 在 btrfs 上计算各层差异易直接超时）
+
+```bash
+# 1. 快速确认 docker 盘总体与已分配空间
+df -h /var/lib/docker; btrfs filesystem usage /var/lib/docker
+# 2. 定位大头是在 volumes 还是 containers 还是 image
+du -sh /var/lib/docker/* 2>/dev/null
+# 3. 抓占用异常的容器可写层（按体积倒序）
+docker ps -a --format '{{.Size}}\t{{.Names}}\t{{.Status}}' | sort -hr | head -20
+# 4. 统计悬空卷数量与总体积
+docker volume ls -q -f 'dangling=true' | wc -l
+docker volume ls -q -f 'dangling=true' | grep -E '^[0-9a-f]{64}$' | awk '{print "/var/lib/docker/volumes/" $1}' | xargs -r du -s 2>/dev/null | awk '{sum+=$1} END {print sum/1024/1024 " GB"}'
+```
+
+### 陷阱 1：Dockerfile VOLUME 隐式创建的大量匿名卷泄漏
+- **机制**：镜像（如 NodeBB `ghcr.io/nodebb/nodebb`）在 Dockerfile 中写了 `VOLUME ["/usr/src/app/node_modules", "/usr/src/app/build"]`。如果 `docker-compose.yml` 未把这些目录显式挂载到具名卷或 host 路径，Docker 每次启动/重建/更新容器都会在 `/var/lib/docker/volumes/` 下新建 64 位哈希匿名卷（每个 node_modules 约 550MB）。
+- **`docker compose down`（不带 `-v`）不会删除匿名卷**，长期维护会累积数百个孤儿卷（实测 490 个卷吞掉 66 GB）。
+- **⚠️ 批量清理陷阱**：**千万不要无脑 `docker volume prune -f`**！它会顺带删掉未挂载的**具名卷**（如暂存的 `hermes_shared_volume` 等）。
+- **精准安全清理**：严格只删 64 位十六进制 hash 的悬空匿名卷：
+  ```bash
+  docker volume ls -q -f 'dangling=true' | grep -E '^[0-9a-f]{64}$' | xargs -r docker volume rm
+  ```
+- **根治方案**：在对应服务的 compose 文件中显式定义具名卷映射，避免反复生成新匿名卷。
+- **维护脚本加固**：把清理匿名卷逻辑加入 User Scripts 的 `delete_dangling_images`，定期运行自动防堆积：
+  ```bash
+  docker volume ls -q -f 'dangling=true' | grep -E '^[0-9a-f]{64}$' | xargs -r docker volume rm 2>/dev/null
+  ```
+
+### 陷阱 2：容器可写层（Writable Layer）暴涨 — 存储路径挂载错位
+- **机制**：容器内应用写文件到非挂载目录。典型案例：Frigate 0.14+ 录像和 clips 默认存储路径是 `/media/frigate`（recordings/、clips/）。若 compose 错误挂载为 `- /host/storage:/data`，录像会全量静默写入容器 rootfs，吃爆 `docker.img`（实测 3 天写满 25.4 GB）。
+- **定位**：`docker exec <c> du -xh --max-depth=2 / | sort -rh | head -10` 检查容器内真实写盘大头。
+- **重建前数据保全铁律**：**严禁直接 `docker compose down` 或重建！**
+  1. 容器内未挂载的业务数据（录像/切片）：海量碎片文件（数万个 mp4 分片）直接用 `docker cp` 会因 socket tar 流或坏块报错 `unexpected EOF`。**Btrfs 宿主直接读取避坑**：
+     ```bash
+     CID=$(docker inspect -f '{{.Id}}' <container>)
+     MID=$(cat /var/lib/docker/image/btrfs/layerdb/mounts/$CID/mount-id)
+     rsync -a --ignore-errors /var/lib/docker/btrfs/subvolumes/$MID/media/frigate/ /mnt/user/appdata/<app>/storage/
+     ```
+     直读 BTRFS 子卷避开 tar 流，每秒数百 MB 且带 `--ignore-errors` 可跳过历史 I/O 坏块。
+  2. 容器内 SQLite 数据库（如 `/config/frigate.db`，实测部分容器挂载了单文件 config.yaml 但并未挂载整个 config 目录）：`docker cp <c>:/config/frigate.db* /mnt/user/appdata/<app>/backup/`（必须把 `.db` + `.db-wal` + `.db-shm` 一并备份）。
+  3. **保库重建四步法（防止开机新库覆盖旧数据）**：
+     ```bash
+     docker compose rm -f -s <app>       # 1. 停并删旧容器（释放 25G 可写层）
+     docker compose create <app>         # 2. 仅创建新容器（不启动）
+     docker cp <backup>/frigate.db* <app>:/config/   # 3. 注入备份数据库到新容器层
+     docker compose start <app>          # 4. 启动新容器，无缝继承历史事件
+     ```
+  4. ⚠️ **Compose v2 跨项目 depends_on 报错**：若 compose 文件里残留 `depends_on: [其他独立容器]`（如 go2rtc），`docker compose config` 会报 `service depends on undefined service: invalid compose project` 阻断。独立维护的容器必须从 `depends_on` 中删去。
 
 ## Unraid config-path split-brain — /mnt/user0 vs /mnt/user vs subdir copies (2026-08-12)
 
@@ -582,6 +648,21 @@ sed -i 's/date="%c"/date="Y-m-d H:i"/' /boot/config/plugins/dynamix/dynamix.cfg
 ```
 
 `[notify]` 段的 `time="H:i"` 本来就是 24 小时制,不用动。若用户报某处仍 12 小时制,多半是插件面板自己的显示,单独查。
+
+## Unraid WebGUI 导航栏架构与插件置顶/快捷访问（2026-10 实测）
+
+- **WebGUI 页面分类与挂载机制 (`.page` 体系)**：
+  - 页面由 `/usr/local/emhttp/plugins/*/*.page` 定义。
+  - **顶栏主标签（一级导航）**：由 `Menu="Tasks:XX"` 控制，数值决定从左到右排序（`Tasks:1`=Main/Dashboard, `Tasks:2`=Favorites/Shares, `Tasks:4`=Settings, `Tasks:50`=Plugins, `Tasks:60`=Docker, `Tasks:70`=VMs, `Tasks:80`=Apps, `Tasks:90`=Tools）。
+  - **顶栏右侧小按钮**：由 `Menu="Buttons:XX"` 控制（Terminal, Logs, Info 等）。
+  - **二级设置项**：如 User Scripts 页面由 `Menu="Utilities"` 挂在 Settings 下的 User Utilities 区域，专属直达 URL 为 `/Settings/Userscripts`。
+- **`/Plugins` 页面列表排序陷阱**：
+  - `/Plugins.page` 内部硬编码 jQuery `tablesorter({sortList:[[4,0],[1,0]]})`，强制按【更新状态 + 插件名称/描述 (A-Z) 升序】排序。
+  - `user.scripts` 等以 U 开头的插件，天然被排在几乎最底部；Unraid 原生不提供在表格内手动拖动重排的设置。
+- **高频插件（如 User Scripts）置顶/秒级直达最佳实践**：
+  1. **原生收藏夹（Favorites，推荐）**：进入 `Settings`，鼠标悬停在 `User Scripts` 图标上点击红心 ❤️（Add to favorites），顶栏即时出现 `Favorites` 一级主标签（`Menu="Tasks:2"`，对应写入 `/boot/config/favorites.cfg`），任何页面 1 击直达，彻底绕过 `/Plugins`。
+  2. **提为一级大标签**：在 `/boot/config/go` 启动时软链或新建一个带 `Menu="Tasks:55"` 的 `.page` 文件，即可与 Docker/Plugins 并列显示在顶栏。
+  3. **表格内强行置顶**：需借助 Tampermonkey 油猴脚本在前端将 `tr#userscripts` 节点 `prepend` 至 `#plugin_list`，或在 `/boot/config/go` 中向 `Plugins.page` 注入相同 JS。
 
 ## 单核长期高占用归因(「cpu4/cpu14 为啥一直高」)—— cputune 钉核链路(2026-09-08 实测)
 
@@ -690,6 +771,29 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 - **安全前提(升级前必查)**:新版安装脚本只 `mkdir -p projects` + 清 `compose.manager-package-*` 遗留包条目,**不碰 `projects/*/docker-compose.yml`**;仍要 `cp compose.manager.plg compose.manager.plg.bak-<date>` 并确认 projects 内容。自带 compose CLI 在 `/usr/lib/docker/cli-plugins/docker-compose`(`docker compose version` 可验)。
 - 迁移后它的自动更新会跟着新 pluginURL 走(若在 ca.update.applications 的列表里)。
 
+## WTR PRO BIOS 刷写与改写实战铁律（2026-10 实测）
+
+- **外设连接**：**压根用不到插鼠标，只插一个 USB 键盘即可**。UEFI Shell 全自动跑脚本，BIOS 界面纯靠方向键 + Enter + Esc + F4，千万别让用户多事翻找/插拔鼠标。
+- **菜单裁剪坑**：天钡（AOOSTAR）工控 AMI BIOS 在 UI 呈现层**直接隐藏了 `Zen Common Options`**（只留了 `NBIO Common Options` 供改 IOMMU 和核显显存）。在 BIOS 里找不到 `Zen Common Options` 或 `Power Supply Idle Control` 属正常现象；必须依靠 Unraid 内核启动参数 `processor.max_cstate=1` 强制在驱动层切除 C2/C3 深睡，效果与 BIOS 禁用完全等价。
+- **核心保留配置**：刷完/改完 BIOS 只需核对两项：
+  1. `Advanced` → `AMD CBS` → `NBIO Common Options` → `IOMMU` 设为 **`Enabled`**（保证软路由网卡直通）。
+  2. `Advanced` → `AC Failure Resume` 设为 **`Always On`**（保证停电来电自启）。
+
+## 意外重启/死机取证 —— 先判「硬件复位 vs 软件重启」，再谈回滚版本
+
+用户报「升级到某版本后自己重启了，以前三五个月都不重启」时，**先定性**：
+
+- **唯一能活过崩溃的证据**是 CPU 复位原因寄存器：`dmesg | grep "Previous system reset reason"`。
+  `0x08000800 … data fabric sync flood` = **硬件级复位**（AMD 互连不可纠正错误，OS 无过错、无日志）；`0x00080800 … software wrote 0x6 to reset control register 0xCF9` = 正常重启。历史若是清一色 `0x00080800`、只有最新一次是 `0x08000800`，就**不是 OS 回归**。
+- **崩溃前日志默认已丢**（Unraid syslog 在 RAM）→ 第一动作永远是把 `syslog_flash="1"` 写进 `/boot/config/rsyslog.cfg` 并重启 rsyslog，验证落进 `/boot/logs/syslog`；上次崩溃的现场就靠它。旧 diagnostics 包里的 `logs/syslog-previous.txt` 可回查历史复位原因。
+- **崩溃时刻**用容器日志反推（json-file 在 docker.img，跨重启保留）：最后一条 frigate 心跳 + 下一分钟缺失 = 复位窗口；新 boot 的 syslog 出现 `emhttpd: unclean shutdown detected` 即确认非正常关机。
+- **`0x08000800` 不要先回滚 OS 版本**：回滚治不了 fabric 错误（官方 7.3.3 known issues 也无重启项，论坛上「升级后狂重启」的案例回滚后照样崩，真凶是节能设置）。按 C-state → NVMe APST/ASPM → 混插内存 / BIOS `Power Supply Idle Control`+`Global C-state` → memtest 的顺序缓解，缓解无效才做版本 A/B（`/boot/previous` 是上一版整包）。
+- **内核侧无损缓解**（改 `/boot/syslinux/syslinux.cfg` 默认 label 的 `append` 行，先备份）：`processor.max_cstate=1 nvme_core.default_ps_max_latency_us=0 pcie_aspm=off`。⚠️ 老配置里 `acpi_enforce_resources=lax` 可能单独占一行，sed 替换 append 行后要删掉那条悬空行。**必须重启生效**。
+- **重启 50.1 = 全屋断网 2–3 分钟**（iStoreOS 软路由 VM 在它上面）—— 先告知/约时间，别默不作声重启。
+- 开机复位取证钩子：`scripts/boot-reset-reason.sh` 放 `/boot/custom/scripts/`，在 `/boot/config/go` 里 `bash ... &`，每次开机追加到 `/boot/logs/reset-history.log`。
+
+全流程（寄存器判读表、syslog 镜像命令行配方、缓解参数表、BIOS/memtest/AGESA 顺序、论坛结论）：`references/unexpected-reboot-forensics.md`。
+
 ## References
 
 - `references/cpu-heat-diagnosis.md` — CPU/风扇高温全记录:hwmon 映射与 80°C 归因、qemu 热点判归属、pwm2/fan2 实测表、自建 CPU 风扇曲线接管;**夜间/持续高温归因手法**(对齐 `/var/log/cpu-fan-curve.log` 与作业时间轴、先量基线、查对方机器的关机习惯、**短作业的长热尾巴 + 候选作业清单:1 分钟粒度找上升沿,别只看正在修的那个作业**)。
@@ -707,4 +811,6 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 - `references/user-scripts-inventory.md` — user scripts 盘点/清理手册: 目录与 schedule.json 结构、2026-09-09 六个脚本逐个判定、mv 式可回滚清理法、悬挂条目/悬空镜像/明文凭据三坑。
 - `references/rclone-backup-verify-and-cleanup.md` — rclone 备份三件事: 会让 rclone **永久挂起**的源类型(FIFO 命名管道等)与排除参数、逐文件校验"是否真同步"的方法、`.partial`/`.tmp-dl` 残留的删除前置校验 + 清单留证 + 释放量核对流程。
 - `references/ha-dashboard-file-ops.md` — HA 仪表盘/卡片运维: 匿名 SMB 入口与备份纪律、YAML 模式三个坑 + include 缓存、**storage 模式走 `lovelace/config/save`**、**破损卡片三查(底图 `/local/`→`/config/www/` 映射 / 实体存在性 / 落点叠图)**、验收清单(WS 解析/字节对比/PIL 预览)+ 「用户想自己拖位置」的本地拖拽编辑器实现与 yaml 解析坑。
+- `references/new-docker-app-install.md` — 从上游镜像装新应用的落地脚手架:摸底命令、后台拉取与存活判据、Unraid 模板 XML 骨架(端口/路径/设备/变量 + ExtraParams)、自启文件、应用自带 doctor/scan 验收阶梯、媒体库"数据库前缀 ↔ 容器挂载"两表映射实例、SMB 投片目录。
 - `references/plugin-inventory-and-removal.md` — Unraid 插件户:本机判决表(必须留 / 可删 / 已迁移 + 复核依据)、卸载后验证清单与"要不要重启"判据、判硬件驱动插件有没有用(modprobe + hwmon + md5)、只读挂 bzmodules/bzfirmware 对比原厂的姿势与三个假阴性(未压缩 cpio、链式 cpio 早停、find maxdepth 截断)。
+- `references/unexpected-reboot-forensics.md` — 意外重启取证:AMD `S5_RESET_STATUS` 判 `0x08000800`(data fabric sync flood=硬件级复位) vs `0x00080800`(软复位)、syslog 镜像命令行配方、`processor.max_cstate=1`/NVMe APST/ASPM 三个缓解参数、混插内存与 BIOS/memtest/AGESA 处置顺序、为什么不要先回滚版本。
