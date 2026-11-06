@@ -91,6 +91,12 @@ minidump 文件名 `MMDDYY-NNNNN-NN.dmp` 里的数字**不是时间**。
 
 **根治选项（要用户拍板，因为会改 UI）**：① 卸载 ExplorerPatcher（最可靠，官方 issue 里作者已确认不装即不再发生）；② 保留 EP 但把它自己的任务栏/托盘模块换回 Windows 原生；③ 等 EP 发新版（已是最新则无解，靠守护脚本兜底）。
 
+**卸载 EP 的实际操作与坑（已实测）**：
+- `ep_setup.exe` 支持 `/uninstall`（带界面）与 **`/uninstall_silent`**（无界面，提权任务里必须用这个，否则弹窗在隐藏会话里永远等不到点击）。需管理员权限（写 `C:\Program Files` + HKLM）。
+- 动手前先备份用户设置：`reg export "HKCU\Software\ExplorerPatcher" <非系统盘>\ep-settings-backup.reg /y`（卸载只删文件与 HKLM 卸载项，HKCU 配置会留着，便于装回来还原）。
+- **🔴 卸载器会把 explorer.exe 杀掉但不会拉起来**（实测：卸完 `Get-Process explorer` 直接“找不到进程”，桌面整个消失）。**所以必须先把 shell-guard 的计划任务装好再去卸载** —— 本次正是守护脚本在 20 秒内把外壳拉回来的；否则用户会以为机器又坏了。卸载后无论如何都跑一次 `Get-Process explorer` 确认进程存在，没有就 `Start-Process explorer.exe`。
+- 验收：`C:\Program Files\ExplorerPatcher` 不存在 + `Get-Process explorer` 的 `Modules` 里不再有 `ep_taskbar.ge.dll`/`pnidui.dll`/`ep_starttiledata.dll` + shell-guard 判活返回 `Ok`。
+
 ## 8. 输出与答复口径
 
 - 报告落 `reports\BSOD_<yyyyMMdd-HHmmss>.md`：代码+参数+责任模块+崩溃时刻+停机时长+期间加载的驱动+LiveKernelEvent+WHEA+转储路径+三条排查建议。
