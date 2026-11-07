@@ -2,7 +2,7 @@
 name: home-assistant-api
 description: Use when reading or controlling Home Assistant entities.
 version: 1.0.0
-author: 50.110 bot
+author: 臣 (50.110)
 platforms: [windows, linux, macos]
 tags: [home-assistant, smart-home, api, credentials]
 metadata:
@@ -133,19 +133,25 @@ hermes gateway status                                                    # 看�
 HA 2024+ 引入 Have I Been Pwned (HIBP) 安全检查，Supervisor 会自动比对插件密码：
 - 若插件（如 `core_samba` 或 `7eca76cc_sambaeasynas`）密码设为 `123` 等常见弱口令，HA 会报系统修复警告：
   `在应用配置中检测到不安全的机密信息：应用“Samba share”在其配置中使用的密钥或密码被检测为不安全`。
-- **WebSocket 诊断与处理**：
+- **完整诊断与更新流程**：
   ```python
-  # 1. 查所有系统修复问题
+  # 1. 列出系统修复警告
   await ws.send(json.dumps({"id": 1, "type": "repairs/list_issues"}))
-  # 返回 issues: [{ "domain": "hassio", "translation_key": "issue_addon_pwned", "translation_placeholders": {"addon": "Samba share", "reference": "core_samba"} }]
-
-  # 2. 查插件当前配置与运行状态
+  # 2. 读取插件当前 options
   await ws.send(json.dumps({"id": 2, "type": "supervisor/api", "endpoint": "/addons/core_samba/info", "method": "get"}))
-
-  # 3. 忽略指定告警（消除前端/手机推送）
-  await ws.send(json.dumps({"id": 3, "type": "repairs/ignore_issue", "issue_id": "<issue_id>", "domain": "hassio", "ignore": True}))
+  # 3. 更新 options 密码为强随机口令
+  opts["password"] = "<NEW_SECURE_PASSWORD>"
+  await ws.send(json.dumps({"id": 3, "type": "supervisor/api", "endpoint": "/addons/core_samba/options", "method": "post", "data": {"options": opts}}))
+  # 4. 重启插件（通过服务调用更稳）
+  # POST /api/services/hassio/addon_restart 携带 {"addon": "core_samba"}
+  # 5. 立即触发 Supervisor 重新跑 HIBP 校验并清零告警（无需重启 HA）
+  await ws.send(json.dumps({"id": 4, "type": "supervisor/api", "endpoint": "/resolution/check/addon_pwned/run", "method": "post", "data": {}}))
   ```
-- **彻底消除告警**：在插件配置中将密码改成未泄漏的强密码，或在前端/WS 标记为 ignore。若改了 Samba 密码，必须同步用 `cmdkey` 更新本机 Windows 凭据，否则 50.110 对 `//192.168.50.206/config` 的文件读写会立刻报权限错误。
+- **Windows 本机连带处理**：
+  - 更新凭据：`cmdkey /add:192.168.50.206 /user:homeassistant /pass:<NEW_PASSWORD>`（必须用 `/add:`，不可用 `/generic:`）。
+  - 清理旧会话缓存：`net use * /delete /y`。若不清理，Windows 工作站服务会缓存旧凭据导致继续报权限拒绝或错误 67。
+  - 凭据归档：写入 gbrain（`gbrain put credentials/ha-samba --force < file.md`）。
+- **备选方案**：若用户要求暂不改密，直接通过 `repairs/ignore_issue` 将该 issue 标记为 ignore，静音手机与前端通知。
 
 ### YAML 模式仪表盘三个坑(都踩过)
 
@@ -330,6 +336,51 @@ save RGBA(crop, a*255): edge 天然为 0 → 无缝
 - 中心直接用**该灯图标的位置**（用户自己拖过的那份）——用户说“跟着图标改”就是指这个
 - 每盏灯一个 `figtype: conditional`(state=on) + 内嵌 `type: image`，`title` 写清楚是哪盏灯，
   以后改位置按 title 匹配最好找
+
+## HA 2026.11 起 HACS 变成内置 Marketplace(更新装不了的真正原因)
+
+HA 2026.11 把 HACS 并入核心,叫 **Marketplace**(`marketplace` 集成,接管原 HACS 配置条目;
+自定义组件目录里不再有 `hacs`,`/hacs`、`/hacsfiles` 仍可用)。仪表盘卡片/集成的更新实体
+仍然是 `update.<repo>_update`,但**安装/更新全部经过 Marketplace**。
+
+- 症状:设置→更新里点安装,报
+  `Open the Marketplace and read the warning first, installing and updating work once it is accepted`
+  (中文界面下面板叫「市场」)。**这不是“没重启”** —— 每个用户首次使用前必须在面板里接受一次风险警告。
+- 解锁:设置 → **市场**(URL `/marketplace`),首次打开弹出警告,勾选
+  `I understand the risks and agree` → **继续**。之后 API 与服务调用即可正常安装。
+- **没有** `marketplace/warning_acknowledge` 这类 WS 命令(实测十几个候选全是 unknown_command),
+  只能走前端一次;
+  没有登录态的浏览器可用「长期令牌注入」登录,不必问密码:
+  ```python
+  js("localStorage.setItem('hassTokens', %s)" % json.dumps({
+      "access_token":TOKEN,"token_type":"Bearer","expires_in":1800,
+      "hassUrl":"http://192.168.50.206:8123","clientId":"http://192.168.50.206:8123/",
+      "expires":int(time.time()*1000)+1800*1000,"refresh_token":""}))
+  ```
+  令牌无 refresh_token,页面整页跳转可能被踢回登录页,**每次操作前重新注入**。
+  HA 前端全是 shadow DOM:`innerText` 拿不到内容,要递归 `shadowRoot` + TreeWalker 取文本,
+  点击用 JS 派发的 `el.click()`(接受按钮是 `ha-button`,文字 `继续`)。
+- 安装走 `POST /api/services/update/install {"entity_id":"update.x"}`;成功返 200,
+  **失败返 500 且 body 的 `message` 就是真实原因**(服务调用错误不会进 HA 通知)。
+  addon 的更新同样用这个服务(`hassio.addon_update` 已不存在,调用 400)。
+
+### Marketplace 强制要求仓库自带 `hacs.json`
+
+报 `Version X of owner/repo is missing the hacs.json file required for installation` =
+作者打包问题(仓库根没有 `hacs.json`,旧 HACS 时期能装、新版拒装)。
+处理顺序:1) 用 GitHub API 确认 root 无 `hacs.json`(`contents/hacs.json?ref=<tag>` 404);
+2) 需要代码的话手工侧载:下载 tag 的 tarball → **先备份** `custom_components/<domain>` 到
+`/config/.hermes-backup-<时间戳>/` → `cp -r` 覆盖(只多出 `__pycache__`,可安全覆盖)→ 重启 HA;
+3) Marketplace 的已装版本记在 `.storage/marketplace.repositories` 的 `version_installed`
+(**不读 manifest**),所以侧载后更新实体仍显示旧版本 → 用
+`update.skip`(带 `entity_id`)把该版本标记跳过,列表即清零;等作者修好发新版会自动再提示。
+
+### 更新后要重启才生效
+
+集成类更新(含 Marketplace 侧载)必须 `POST /api/services/homeassistant/restart` 才加载新代码;
+addon/仪表盘卡片不用。重启返回时连接会 `RemoteDisconnected`(正常),之后轮询 `/api/config`
+恢复 + `/api/states` 实体数与重启前一致 = 启动成功。验证侧载真的生效:
+`curl http://<HA>/<domain>/<asset>.js | cmp - 包内文件`。
 
 ## 相关
 
