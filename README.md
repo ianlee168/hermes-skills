@@ -38,6 +38,7 @@
 | `windows-portable-app-upgrade/` | 50.110 Windows bot | 便携/绿色版软件无损升级：注册表无 App Paths/Uninstall 即判定便携版、用户数据 vs 厂商数据库的判别法、`/downloads/<base64>=` 常是壳页要捞 CDN 直链、**launcher `.bat` 必须纯 ASCII 且 CRLF**（`chcp 65001` 救不了中文 bat，实测把用户坑出满屏 `'/Y' 不是内部或外部命令`）、退出才回写 ini 的程序靠 launcher 补最后一次同步；`references/aida64-extreme.md` 为 AIDA64 实例 |
 | `dsh-desktop-runtime-repair/` | 50.110 Windows bot | DeepSeek Harness 桌面端启动崩溃（`ENOENT resources/runtime/...`）：根因是 NSIS 更新包 payload 里的 runtime 未写全，从 updater 缓存的 `$PLUGINSDIR/app-64.7z` 补 6144 个文件即可，不必重装；含整盘对比与验收判据 |
 | `lan-photo-import/` | 50.110 Windows bot | 两台 Windows / 手机之间局域网搬照片：浏览器直传服务（`server.py`+`app.html`+启停 bat）；防火墙按**程序路径**放行（Public 配置文件）、bat 必须 CRLF、MSYS 里 `cmd //c "中文名.bat"` 不执行 |
+| `exchange-api-connectivity/` | 50.110 Windows bot | 交易所 API 连不上（3commas 报 `Authentication Error. Invalid API Key.`）：三市场同报=key 级问题、平台抽屉里取当年 IP 全量清单、币安「默认安全控制措施」会把「允许合约」锁灰、headless 过不了 Cloudflare 要起可视化 Chrome；凭证只在 gbrain |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -155,6 +156,7 @@ git push origin main
 | `hermes-windows-bash-quirks/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `qinglong/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `microsoft-rewards-signin/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `exchange-api-connectivity/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
 
 ## 冲突常见场景
