@@ -66,7 +66,7 @@ metadata:
 
 - **下单与对账只能在 50.110**：API key 的 IP 白名单绑死本机出口 IP，161 查不到账户。
 - **告警跑在 50.161**（24/7，只看公开行情，不需要 key）：`~/trading/vmon.py` + crontab `*/5`；持仓表靠 50.110 的 `positions.json` scp 过去（执行器下单后自动同步，日报也会同步一次）。
-- 告警档位：仓位偏离 1.5/2.5/3.5/5%、距止损/止盈 <1%、15 分钟 ≥2.5% 急拉急杀、合计浮亏 ≥5 USD；`alert_state.json` 做档位去重（同档 30 分钟冷却、回落 6 小时才重报）。
+- 告警档位：仓位偏离 3/4.5/6%（用户 2026-11-08 定的起报线 3%，之前 1.5% 太吵）、距止损/止盈 <1%、15 分钟 ≥3% 急拉急杀、合计浮亏 ≥5 USD；`alert_state.json` 做档位去重（同档 30 分钟冷却、回落 6 小时才重报）。
 - Telegram 推送：50.161 的 `~/.hermes/.env` 里有 `TELEGRAM_BOT_TOKEN`（bot `<bot-name>`），chat_id 在 `~/.hermes/.channel_directory_*.tmp`。50.110 没有 telegram token，要推就从 110 `ssh 161 "python3 vmon.py --send-text '<text>'"`。
 - 每日简报 cron 在 50.110（01:00，`daily_pnl_report.py`），因为要读私有账户；脚本自己 ssh 到 161 推 Telegram，同时在 chat 里留一份。
 - 机器可用时段：50.110 只排 15:00-01:00 的 cron，01:42-08:55 关机 —— 夜间监控必须放 161。
