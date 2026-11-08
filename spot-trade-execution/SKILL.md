@@ -62,7 +62,18 @@ metadata:
 - **低于最小成交额卖不掉**：USDC 3 USD 这类零头会因 `minNotional` 5 USD 直接报废，别反复重试；无现货交易对的（SOLO、ETHW）也只能留着。
 - 现成执行器：`D:\<workspace>\binance_trade.py`（= 本 skill 的 `scripts/binance_spot_executor.py`；caps 内置，`buy/open/balance/price/cancel` 子命令；凭据 `D:\<workspace>\.bnb_key.json`，用完撤）。
 
+## 告警与日报架构（50.110 下单 / 50.161 24/7 推送）
+
+- **下单与对账只能在 50.110**：API key 的 IP 白名单绑死本机出口 IP，161 查不到账户。
+- **告警跑在 50.161**（24/7，只看公开行情，不需要 key）：`~/trading/vmon.py` + crontab `*/5`；持仓表靠 50.110 的 `positions.json` scp 过去（执行器下单后自动同步，日报也会同步一次）。
+- 告警档位：仓位偏离 1.5/2.5/3.5/5%、距止损/止盈 <1%、15 分钟 ≥2.5% 急拉急杀、合计浮亏 ≥5 USD；`alert_state.json` 做档位去重（同档 30 分钟冷却、回落 6 小时才重报）。
+- Telegram 推送：50.161 的 `~/.hermes/.env` 里有 `TELEGRAM_BOT_TOKEN`（bot `<bot-name>`），chat_id 在 `~/.hermes/.channel_directory_*.tmp`。50.110 没有 telegram token，要推就从 110 `ssh 161 "python3 vmon.py --send-text '<text>'"`。
+- 每日简报 cron 在 50.110（01:00，`daily_pnl_report.py`），因为要读私有账户；脚本自己 ssh 到 161 推 Telegram，同时在 chat 里留一份。
+- 机器可用时段：50.110 只排 15:00-01:00 的 cron，01:42-08:55 关机 —— 夜间监控必须放 161。
+
 ## 坑
+
+- **已实现 PnL 必须按比例计入**：卖出量往往大于本轮买入量（例如老仓 2000 DOGE 里只带 154 的新仓），如果把整笔 `quoteQty` 都减成本，会凭空多出一大笔“利润”（实测虚报 +132 USDT，而真值是 +0.07）。正确：`pnl += quoteQty * (take/qty) - avg*take`。这个数值直接喂给熔断判定，算大了就不会止损停手。
 
 - **手续费从 base 币扣 → OCO 报 -2010**：市价买入后 `executedQty` 可能**大于**该币的 `free`（差在手费），直接拿 `executedQty` 挂 OCO 会 `-2010 inufficient balance`，仓位在这段时间是裸露的。正确写法：`qty = min(executedQty, 该币 free)`，再按 `stepSize` 用 **ROUND_DOWN** 取整（默认 `quantize` 是 half-even，会向上舍入）。剩下的零头（如 BTC 0.00000882）小于一步，只能 unprotected 留着。
 
