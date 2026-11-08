@@ -39,6 +39,7 @@
 | `dsh-desktop-runtime-repair/` | 50.110 Windows bot | DeepSeek Harness 桌面端启动崩溃（`ENOENT resources/runtime/...`）：根因是 NSIS 更新包 payload 里的 runtime 未写全，从 updater 缓存的 `$PLUGINSDIR/app-64.7z` 补 6144 个文件即可，不必重装；含整盘对比与验收判据 |
 | `lan-photo-import/` | 50.110 Windows bot | 两台 Windows / 手机之间局域网搬照片：浏览器直传服务（`server.py`+`app.html`+启停 bat）；防火墙按**程序路径**放行（Public 配置文件）、bat 必须 CRLF、MSYS 里 `cmd //c "中文名.bat"` 不执行 |
 | `exchange-api-connectivity/` | 50.110 Windows bot | 交易所 API 连不上（3commas 报 `Authentication Error. Invalid API Key.`）：三市场同报=key 级问题、平台抽屉里取当年 IP 全量清单、币安「默认安全控制措施」会把「允许合约」锁灰、headless 过不了 Cloudflare 要起可视化 Chrome；凭证只在 gbrain |
+| `3commas-mcp/` | 50.110 Windows bot | 3commas 官方 MCP/REST 接入（`mcp.trade.3commas.io/mcp`，头 `X-API-Key`/`X-Secret-Key`）、网页建 key 的 5 组读写权限矩阵、有 IP 才永不过期、`mcp>=2.3` 客户端改名坑（`streamable_http_client` + `create_mcp_http_client`）、17 个工具清单、套餐价格与「Free 不能交易」、2FA 必查；凭证只在 gbrain |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -157,6 +158,7 @@ git push origin main
 | `qinglong/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `microsoft-rewards-signin/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `exchange-api-connectivity/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `3commas-mcp/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
 
 ## 冲突常见场景
