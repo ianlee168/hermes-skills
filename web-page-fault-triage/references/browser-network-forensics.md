@@ -66,7 +66,10 @@ js("performance.getEntriesByType('resource').length")
 ```python
 # 先看 token 存在哪、长什么样
 js("(()=>{const u=JSON.parse(localStorage.getItem('app-user')); return Object.keys(u).join(',')+' | '+(u.token||'').slice(0,12)})()")
-# 带 token 探测；路径猜两次 404 就停，改从 __resp 里抄真实 endpoint
+# ① 先捞应用真实用过的 endpoint（不用猜，且包含 hook 装上之前的请求）
+js("JSON.stringify([...new Set(performance.getEntriesByType('resource').map(r=>r.name))].filter(u=>/\\/api|\\/hx|\\/v1|user\\//.test(u)).slice(0,40))")
+# ② 再带 token 直接打；两次 404 就停。
+#    404 且 body 是 HTML(`<title>Not Found</title>`) = 路由根本不存在，同前缀的变体不要再试。
 js("""(async () => {
  const t=JSON.parse(localStorage.getItem('app-user')).token;
  const r=await fetch('/api/xxx',{headers:{Authorization:t}});
