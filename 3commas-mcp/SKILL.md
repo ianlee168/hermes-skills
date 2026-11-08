@@ -9,7 +9,7 @@ tags: [3commas, mcp, api, trading-bots, binance]
 metadata:
   hermes:
     tags: [3commas, mcp, api, trading-bots, binance]
-    triggers: ["3commas MCP", "3commas API", "3commas 工具", "开仓", "平仓", "策略", "机器人", "get_live_strategies", "place_strategy_trade", "订阅套餐"]
+    triggers: ["3commas MCP", "3commas API", "3commas 工具", "开仓", "平仓", "策略", "机器人", "get_live_strategies", "place_strategy_trade", "订阅套餐", "日收益目标", "几天翻倍", "模拟盘", "现货余额"]
 ---
 
 # 3commas MCP / REST API
@@ -21,7 +21,7 @@ metadata:
 - 要评估 3commas 套餐能不能跑实盘。
 - 网页端 API 页创建 MCP key、或 MCP 连接报错时排障。
 
-配对 skill：`exchange-api-connectivity`（交易所 API key 连不上、IP 白名单）。
+配对 skill：`exchange-api-connectivity`（交易所 API key 建/删、IP 白名单、强验证）；`spot-trade-execution`（实盘下单与硬风控）。
 
 ## 服务端点（官方，2026-11 实测）
 
@@ -77,6 +77,8 @@ async with streamable_http_client(URL, http_client=http_client) as streams:
 
 - `streamable_http_client()` **没有 `headers=` 参数**，头必须走 `create_mcp_http_client(headers=...)`。
 - 现成脚本：`D:\hermes-test\mcp3c.py`（列工具）、`mcp3c_call.py <tool> '<json>'`（调工具）、`mcp3c_schema.py <tool>`（看参数 schema）；凭据读 `D:\hermes-test\.3c_api.json`。
+- 日报脚本：`~/AppData/Local/hermes/scripts/3commas_trial_report.py`（cron 每天 21:00）——输出 demo 策略盈亏 + 现货余额日变化（自带 `D:\hermes-test\3c_balance_snapshot.json` 快照比对），自己按 `get_exchange_markets` 现价折出 `total_usd`。cron 用 `script=` 把这个 JSON 注入 prompt，agent 只负责措辞，不在回复里重算数字。
+- `mcp3c_call.py` 默认把 stdout 全额打印；不要加 `[:4000]` 截断，否则 JSON 不完整直接解析失败。
 
 ## 4. 工具清单（17）
 
@@ -84,7 +86,9 @@ async with streamable_http_client(URL, http_client=http_client) as streams:
 
 写/交易：`create_api_profile`、`edit_api_profile`、`delete_api_profile`、`place_strategy_trade`、`edit_trade_strategy`、`cancel_strategy`、`close_strategy_market`、`place_strategy_market_enter`、`place_strategy_swing`
 
-`get_api_profiles` 每个市场一条：`exchange.code` ∈ `BINANCE`(现货) / `BINANCE_FUTURES`(USDT-M) / `BINANCE_DELIVERY`(COIN-M)，同一连接共享 `masterCode`，`status` 可能是 `active` / `no_assets`，`demo: true` 是模拟盘。
+`get_api_profiles` 每个市场一条：`exchange.code` ∈ `BINANCE`(现货) / `BINANCE_FUTURES`(USDT-M) / `BINANCE_DELIVERY`(COIN-M)，同一连接共享 `masterCode`，`status` 可能是 `active` / `no_assets`，`demo: true` 是模拟盘；现货 `balance.assets.<币>.total` 是数量。
+
+策略对象字段（`get_strategy` / `get_live_strategies`）：`pair` 是**纯字符串**（`"BTCUSDT"`，不是对象）、`pairSymbols: {base, quote}`、`profitLossInPercent` 直接给百分比、`takeProfits[0].price/status`、`stopLossStatus`（`not triggered`）、`totalEntryCost`/`totalEntryAmount`/`totalProfitLoss`、`paperTrading`、`status` ∈ `new`/`entered`/…。
 
 ### place_strategy_trade 最少可用参数（实测 2026-11-08）
 
@@ -110,7 +114,7 @@ async with streamable_http_client(URL, http_client=http_client) as streams:
 | Pro | US$38/月 | 省 $150 | 5 | 10 | 20 / 20 / 10 |
 | Expert | US$105/月 | 省 $420 | 25 | 50 | 1000 |
 
-**Free 套餐不能交易**（手动也不行），只能连交易所看余额。新账号默认 Pro 7 天试用；试用到期降 Free，所以“试用期跑出利润再订阅”只能在试用这几天内做，且真钱单要用户当轮点头。
+**Open API / MCP 在免费与试用套餐下只放 DEMO 交易。** 对 `demo: false` 的 profile 调 `place_strategy_trade` 会被服务端直接拒，报错原文：`Only DEMO trading allowed. Please upgrade your plan to be able to trade with Exchange API profiles.` 所以“试用期用 MCP 跑真钱”这条路不存在 —— 要么付费订阅，要么绕开 3commas 直接调交易所 REST API（见 `spot-trade-execution`），3commas 留着跑 demo 做对照。另外 **Free 套餐在网页端也不能交易**（手动也不行），只能连交易所看余额；试用到期降 Free，真钱单要用户当轮点头。
 
 ## 6. 安全盘点必查项
 
@@ -118,15 +122,22 @@ async with streamable_http_client(URL, http_client=http_client) as streams:
 - 交易权限的 key 必须配 IP 白名单；交易所侧白名单缺 IP 会导致全部市场认证失败（见 `exchange-api-connectivity`）。
 - 老 key / 老连接不主动删，删除一律先问。
 
-### 币安侧删 key（已获授权时怎么点）
+### 币安侧删 key
 
-- 点卡片「删除」**不出弹窗**，而是该行原地弹 popover：`您确定要删除API密钥<名字>吗？` + 完整 key + `取消`/`确认`。
-- 两个按钮都是 `<button>`，取 `document.querySelectorAll('button')` 里最后一个「确认」即可；**删完不再要 2FA**。
-- 校验：页面上「删除」按钮个数 3 → 2，或 li 数量少一条。
+流程与选择器见 `exchange-api-connectivity` §2「删 key」——popover 原地确认，删完不再要 2FA，校验看列表少一条。
 
-## 7. 铁律
+## 7. 余额口径：3commas 视图 ≠ 真实余额
+
+- `get_api_profiles` 的现货 `balance.assets` 是 3commas 侧快照，**会漏币、会滞后**：实测币安现货真实 ≈471 USD，3commas 只报 249.7 USD，缺 1000 DOGE 和全部 ETH；币安交易页确认这两项都是「可用」，不是挂单冻结。差额不是亏损、不是资产消失，别当异常报警。
+- 报数前先核对真实余额：`https://www.binance.com/zh-CN/trade/<BASE>_USDT?type=spot` 页里的「可用 / 可卖」就是该币真实可用量（`/my/open-orders`、`/my/orders` 这类 /my/ 页可能整页报「系统遇到问题」，交易对页更稳）。
+- 口径固定成两行：「3commas 视图」+「币安真实」，差额写明原因（快照滞后）；仓位与风控一律按币安真实值算。
+- 日变化只能自建快照比对（`3c_balance_snapshot.json`）——3commas 不提供历史余额接口，没快照就别编“较昨日 +X”。
+
+## 8. 铁律
 
 - **任何开平仓、改策略参数都要用户当轮明确同意**；“以上都要”不等于可以下真钱单。测试一律先在 `demo: true` 模拟账户跑。
 - **写权限 key 与只读 key 分开**：只读常驻给 MCP 查用，写入单独一把，出事能单独吊销。
 - 报告只讲结果面：`get_api_profiles` 的 `status`/余额、`get_live_strategies` 的策略数与 `totalProfitLoss`。
+- **不承诺收益率**：用户提“日 X%、N 天翻倍”这类目标时，先给复利数学（日 10% × 6 天 = +77%；6 天翻倍需 12.25%/日；日 10% 年化 ≈1.3e15 倍），再明说做不到、不当业绩承诺；把话题转成风控参数（单笔风险 ≤1–2%、杠杆 ≤2x、硬止损、并行笔数），并把「不亏 + 测清滑点和手续费」定成试用期的硬指标。
+- **真钱下单前必须拿到三样**：本金上限、单笔上限、最大回撤。缺一样就只跑 `demo: true`，不要用“先小仓试试”替代授权。
 - key/secret 不进聊天：一次性弹窗用 `js()` 读进变量或直接写文件/gbrain。
