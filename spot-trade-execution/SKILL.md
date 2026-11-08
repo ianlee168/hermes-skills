@@ -60,9 +60,11 @@ metadata:
 - 撤单：`DELETE /api/v3/order` 用 `orderId` 或 `origClientOrderId`；**OCO 要用 `DELETE /api/v3/orderList` 带 `orderListId`**，按单腿 `orderId` 会报 order does not exist。
 - **XRP 有储备**：币安 XRP 余额里约 10 XRP 是储备（reserve），卖全额会报 `-2010 insufficient balance`，要按 `free - 10` 下，剩下的卖掉不动。
 - **低于最小成交额卖不掉**：USDC 3 USD 这类零头会因 `minNotional` 5 USD 直接报废，别反复重试；无现货交易对的（SOLO、ETHW）也只能留着。
-- 现成执行器：`D:\hermes-test\binance_trade.py`（= 本 skill 的 `scripts/binance_spot_executor.py`；caps 内置，`buy/open/balance/price/cancel` 子命令；凭据 `D:\hermes-test\.bnb_key.json`，用完撤）。
+- 现成执行器：`D:\<workspace>\binance_trade.py`（= 本 skill 的 `scripts/binance_spot_executor.py`；caps 内置，`buy/open/balance/price/cancel` 子命令；凭据 `D:\<workspace>\.bnb_key.json`，用完撤）。
 
 ## 坑
+
+- **手续费从 base 币扣 → OCO 报 -2010**：市价买入后 `executedQty` 可能**大于**该币的 `free`（差在手费），直接拿 `executedQty` 挂 OCO 会 `-2010 inufficient balance`，仓位在这段时间是裸露的。正确写法：`qty = min(executedQty, 该币 free)`，再按 `stepSize` 用 **ROUND_DOWN** 取整（默认 `quantize` 是 half-even，会向上舍入）。剩下的零头（如 BTC 0.00000882）小于一步，只能 unprotected 留着。
 
 - **假熔断**：用 `myTrades` 算当日已实现 PnL 时，如果把 `isBuyer=true` 的成交当成亏损（`-quoteQty`），每一笔买入都会把熔断直接点燃（实测：买入 10.9 USD 就报“当日亏损触及 5 USD”）。必须用**均价法**：维护 qty/cost，只在卖出且 qty>0 时结算 `quote - avg*qty`；今日之前的成交只用于恢复持仓与成本。
 - **挂单会锁仓**：`/api/v3/account` 的 `free` 不含 OCO 挂着的币（`locked` 里），总资产估值要用 `free + locked`，否则会少算一整个仓位的价值（实测少报 $60）。

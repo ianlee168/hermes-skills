@@ -26,16 +26,18 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://api.binance.com"
-KEYFILE = r"D:\hermes-test\.bnb_key.json"
+KEYFILE = r"D:\<workspace>\.bnb_key.json"
 
 MAX_TRADE_USD = 157.0
 MAX_POSITIONS = 2
 HARD_STOP_PCT = 0.03
 DAILY_LOSS_LIMIT = 5.0
 
+
 def creds():
     c = json.load(open(KEYFILE))
     return c["key"], c["secret"]
+
 
 def req(method, path, params=None, signed=False):
     params = dict(params or {})
@@ -64,22 +66,27 @@ def req(method, path, params=None, signed=False):
         except Exception:
             return {"error": body, "status": e.code}
 
+
 def free_assets():
     acc = req("GET", "/api/v3/account", signed=True)
     if "error" in acc:
         return acc
     return {b["asset"]: round(float(b["free"]), 8) for b in acc["balances"] if float(b["free"]) > 0}
 
+
 def usdt_free():
     a = free_assets()
     return 0.0 if "error" in a else a.get("USDT", 0.0)
 
+
 def price(symbol):
     return float(req("GET", "/api/v3/ticker/price", {"symbol": symbol})["price"])
+
 
 def open_orders(symbol=None):
     params = {"symbol": symbol} if symbol else {}
     return req("GET", "/api/v3/openOrders", params, signed=True)
+
 
 def day_realized_pnl(symbols):
     """当日已实现盈亏近似：当日 SELL 计入 +quote，BUY 计入 -quote（跨币种需按币种分别算）"""
@@ -95,6 +102,7 @@ def day_realized_pnl(symbols):
             q = float(t["quoteQty"])
             pnl += -q if t["isBuyer"] else q
     return pnl
+
 
 def buy(symbol, quote_usd, tp=0.06, sl=HARD_STOP_PCT):
     quote_usd = float(quote_usd)
@@ -135,6 +143,7 @@ def buy(symbol, quote_usd, tp=0.06, sl=HARD_STOP_PCT):
         "verify": "回读 open(orders) 确认两腿都在；再读 myTrades 看手续费",
     }
 
+
 def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "balance"
     if cmd == "balance":
@@ -160,6 +169,7 @@ def main():
                          ensure_ascii=False, indent=1))
     else:
         print("usage: balance|price SYM|open [SYM]|buy SYM USD [--tp 0.06] [--sl 0.03]|cancel SYM ID|cancel-oco SYM LISTID")
+
 
 if __name__ == "__main__":
     main()
