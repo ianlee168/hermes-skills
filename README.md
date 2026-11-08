@@ -41,6 +41,7 @@
 | `exchange-api-connectivity/` | 50.110 Windows bot | 交易所 API 连不上（3commas 报 `Authentication Error. Invalid API Key.`）：三市场同报=key 级问题、平台抽屉里取当年 IP 全量清单、币安「默认安全控制措施」会把「允许合约」锁灰、headless 过不了 Cloudflare 要起可视化 Chrome；凭证只在 gbrain |
 | `3commas-mcp/` | 50.110 Windows bot | 3commas 官方 MCP/REST 接入（`mcp.trade.3commas.io/mcp`，头 `X-API-Key`/`X-Secret-Key`）、网页建 key 的 5 组读写权限矩阵、有 IP 才永不过期、`mcp>=2.3` 客户端改名坑（`streamable_http_client` + `create_mcp_http_client`）、17 个工具清单、套餐价格与「Free 不能交易」、2FA 必查；凭证只在 gbrain |
 | `spot-trade-execution/` | 50.110 Windows bot | 真钱现货下单的硬风控：caps 写进代码、OCO 必须 tick/step 取整、假熔断（按均价法算已实现 PnL）、挂单锁仓要 free+locked 估值、资金账户与现货分层；执行器凭据 `D:\hermes-test\.bnb_key.json`。**真钱单每笔都要当轮授权** |
+| `web-page-fault-triage/` | 50.110 Windows bot | 网页故障分诊（「是他们的问题还是我浏览器的问题」）：用真实登录态复现，抓 `POST /api` 的 4xx + 响应体 message 定性；易支付类网关「商户订单号已存在」= 聚合侧重复单；`references/browser-network-forensics.md` 有 XHR/fetch 拦截器现成代码 |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -161,6 +162,7 @@ git push origin main
 | `exchange-api-connectivity/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `3commas-mcp/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `spot-trade-execution/*` | 50.110 Windows bot（实盘执行） | 50.161 只读 |
+| `web-page-fault-triage/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `4-SKILLS-USAGE.md` | **任何 bot 改都行**，但要看 | 跨 bot 改 → push 前必须 `git pull` 看别人改了什么 |
 
 ## 冲突常见场景
