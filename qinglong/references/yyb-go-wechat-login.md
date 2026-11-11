@@ -73,4 +73,39 @@ token 换到了但账号 0 成功、中间零输出 → 脚本某步 return 了�
 7. 验证: `docker exec -w /ql/data/scripts qinglong python3 avatr_sign.py` 与 `docker exec -w /ql/data/scripts/jesting qinglong python3 jesting.py` → 期望 `✅ 阿维塔签到成功` / `📊 成功: 1/1`
 8. 误扫/用错微信的那张: `POST /qr/<sid>/cancel` 作废掉(否则事后被 confirm 会绑错号)
 
+### 判「扫的是不是绑了阿维塔的那个微信」(2026-11-11 实测)
+
+用户扫码后 `GET /accounts` 会多出一个账号条目,但 **alive ≠ 能用**: 小号扫进来照样 `alive`,`getCode` 也能返回 32 位 code。真正的判据在第三步 thirdLogin:
+
+- 绑对了: `{"code":0,"result":{"loginToken":"<169 字符 JWT>","bindAccountFlag":1}}`
+- 扫错号: `{"code":0,"result":{"loginToken":null,"bindAccountFlag":0,"firstLogin":false}}` ← 该微信没有阿维塔账号
+
+扫错号**不会报错**,阿维塔脚本只写 `❌ 没拿到有效登录凭证`,极易误判成"码没扫上"。处置: 换回绑过阿维塔的那个微信重扫;若那个微信已不可用,让用户用当前微信先在阿维塔小程序/App 登录并手动签到一次(绑定建立后同一张已扫的码即可换出凭证,不必再扫)。小号留下的账号条目不用删(脚本只按 config.json 里的 openid 取 code),但排查时别被它误导。快速验证: `docker exec qinglong python3 /ql/data/scripts/yyb_watch.py --no-push`。
+
+### 巡检自动化(2026-11-11)
+
+青龙任务 **2368「YYB-Go登录态巡检」**: `task yyb_watch.py`,排期 `10 10,21 * * *`。三层判据(服务层 health / 凭据层 getCode 502 / 绑定层 thirdLogin token) + 连续异常天数,正常静默、异常推 TG。本节 1-8 步就是它报警后的手动作业流程;巡检脚本源码同仓 `qinglong/scripts/yyb_watch.py`。
+
+### 二维码状态码语义 +「扫错微信」的判据(2026-11-11 实测)
+
+- `GET /qr/<sid>/poll` 的 `data.status` 只有三档:`pending`(未扫)→ `authorized`(已扫确认,**必须再 confirm**,否则账号永远不更新)→ `expired`(errcode 402,码超时作废)。**二维码 TTL 是分钟级**:用户没在两三分钟内扫就报废。用户回一句「失效了/再来」时不要再排查原因,直接 `POST /qr` 现取一张新的再发;连发几次都正常。
+- **扫错微信不会报错,只会静默换不出凭证** —— 这是最容易误判成"账号又死了"的形态:`confirm` 成功、新账号 `status=alive`、`/wxapp/getCode` 也正常返回 code(32 位),但阿维塔 `thirdLogin` 回 `code=0` 而 `result.loginToken=null`、`bindAccountFlag=0`、`firstLogin=false` → 脚本报 `❌ 没拿到有效登录凭证`。含义是**这个微信根本没绑阿维塔账号**(与 110000 不同:110000 是绑了但没在 App 激活过;空 result 是压根没绑)。
+- **一眼认出扫错了**: `confirm` 返回的 `data.openid` 与脚本 config.json 里的 `openid` **不相等** = 用户扫的是另一个微信号(openid 没变才是同一个微信重扫)。此时 `/accounts` 会多出一条新记录、旧的主力账号仍是 `unknown`,别把新账号的 alive 当成修好了。
+- 处置:让用户改用**平时签到阿维塔的那个微信**重扫(把上一张 `POST /qr/<sid>/cancel`);那个微信已不用的话,备选是先在该微信号上打开阿维塔小程序/App 登录并手动签到一次完成绑定,再重扫。新增的误绑账号可留着(alive 无害),别拿它去跑签到。
+
+### 隔离探针:不碰线上 config 验证某 openid 能不能签(2026-11-11 实测)
+
+重扫后想确认"这个 openid 到底能不能签到"时,别改 `/ql/data/scripts/config.json` 再跑任务 —— 把脚本和一份改过 openid 的 config 复制到容器 `/tmp` 子目录直跑即可(脚本用 `__file__` 定位 config,天然隔离):
+
+```
+os.makedirs("/tmp/aprobe"); shutil.copy2("/ql/data/scripts/avatr_sign.py", "/tmp/aprobe/")
+cfg=json.load(open("/ql/data/scripts/config.json")); cfg["openid"]=<新 openid>
+json.dump(cfg, open("/tmp/aprobe/config.json","w"), ensure_ascii=False)
+subprocess.run([sys.executable, "/tmp/aprobe/avatr_sign.py"], cwd="/tmp/aprobe")
+```
+
+- 探针本身在宿主机写好 → `scp` 到宿主 → `docker cp` 进容器 → `docker exec qinglong python3 /tmp/probe.py`(宿主机无 python3)。
+- 要**原始响应**就把脚本当模块 import(`importlib.util.spec_from_file_location`),复用它的 `gen_sign()`/`HOST` 常量自己打一次 `thirdLogin`,打印字段**结构**(`{k: "<str len N>"}`),绝不把 loginToken 本体打出来。
+
+
 **不要为这类到期挂监测**(2026-10-03 用户明确否决): 阿维塔 App 自己会提醒用户去签到, 用户从 app 知道后就来找 agent 重扫。agent 收到"阿维塔/捷停车挂了"的消息时, 直接按上面 1-8 步走(取二维码 MEDIA 发用户扫 → poll → **confirm** → 单跑验证), 全程不需用户登 YYB 后台或提供密码。

@@ -12,9 +12,9 @@ tags: [docker, scheduling, qinglong]
 
 - **面板的写操作只归一条会话/实例**(当前: 110妹@50.110 主会话);其它会话(同机其它聊天窗口、161姐@50.161)**只读**。理由: 已有两次真实冲突——A 会话把 `status` 写成 0(=running) 想修"运行中"反而复现症状, B 会话同时按枚举改成 1/2;且双方在计划外手动触发 JD 换凭证任务(16:34/16:49/17:02/22:42 四次)——⚠️ 2026-10-05 复核日志更正: 前三次是三个账号各自的**成功**转换、第四次是排障,“这四次把账号送进风控”证据不足已撤回;真正该守的是**同一账号失败后不立刻重试**。
 - **账号级“观察期”(2026-10-05 用户明令)**: 账号1 `ianlee168` 处于京东侧“不放行”态——两次**全新**抓取的 wskey 都在 genToken 这一步就被拒(`tokenKey=xxx` / 日志“疑似IP风控等问题 默认为失效”);同一出口 IP、同一次运行下账号2/3 均成功 → 证明是**账号级**、不是 IP 级也不是值级。**禁止手动跑 2335/2286 去“试”这个账号**(试不出结果，只增风控噪音): 交给 2335 每天 11:38 自试、结果由 2367 每天 11:45 推 TG;连续多天仍 xxx 就等观察窗(几天~两周)自己过去。另: 若 App 开了“登录保护/设备锁”、或存在陌生设备，先清掉再重抓一次，这是最有可能立军见影的一步。
-- 接手前先 `sqlite3 ... "select id,name,status,pid,isDisabled from Crontabs where pd IS NOT NULL"` + 看 `RunningInstances` 最近行, 判断有无别人正在改造; 发现别的会话在动 → **停手报告陛下**, 不要并行改。
-- 手动触发任何需要“拿账号去换凭证”的任务(jd_wskey/jd_wsck/签换类)先问陛下——这类任务多跑几次就可能被风控误判并把 cookie 自动禁用。
-- 单一写者声明已落在面板目录: 宿主机 `/mnt/user/appdata/qinglong/OWNER.md`(容器内 `/ql/data/OWNER.md`)。**动手前先读它**;owner 不是自己 → 只读诊断 + 把「要改什么/证据/回滚方案」报给陛下。
+- 接手前先 `sqlite3 ... "select id,name,status,pid,isDisabled from Crontabs where pd IS NOT NULL"` + 看 `RunningInstances` 最近行, 判断有无别人正在改造; 发现别的会话在动 → **停手报告用户**, 不要并行改。
+- 手动触发任何需要“拿账号去换凭证”的任务(jd_wskey/jd_wsck/签换类)先问用户——这类任务多跑几次就可能被风控误判并把 cookie 自动禁用。
+- 单一写者声明已落在面板目录: 宿主机 `/mnt/user/appdata/qinglong/OWNER.md`(容器内 `/ql/data/OWNER.md`)。**动手前先读它**;owner 不是自己 → 只读诊断 + 把「要改什么/证据/回滚方案」报给用户。
 - 定位“这是谁改的”: 先看产物 mtime → `session_search` 自己的会话(**同机其它聊天窗口也算“自己”**,别一口咬定是另一台机器的分身) → 再查另一台机的 cron/session 存储(cron 常驻看 `~/.hermes/cron/`)。别凭印象归因。
 
 ## 用户环境
@@ -126,6 +126,15 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 所以「看任务日志」= 先 `GET /api/logs` 找到目录 children 里最新的 `title`,再 detail 取正文 —— 不必 ssh 宿主机、不必 docker exec。
 (`GET /api/scripts?path=/` 列根目录会 403 暂无权限;带 `?file=xxx` 反而能列出整棵树。)
 
+### 用户说「这个签到任务怎么没了」= 先证明存在,再拉失败时间线
+
+用户看不到某任务,绝大多数情况是**它连着几天失败、不再产出结果/通知**,不是被删。按序做,别先问"你在看哪个页面":
+
+1. `GET /api/crons?search=&t=1` 取全量,按名字/命令关键词匹配 → 有 `id` 且 `isDisabled=0` 就说明**任务还在、还启用**。
+2. 要复核"用户屏幕上到底显示什么",直接开面板 `http://192.168.50.1:6700/crontab` —— **必须是 path 路由**;`/dashboard#/crontab` 这类 hash 跳转不会切页,会静默停在仪表盘(踩过,拿到的还是仪表盘 DOM)。本机 Chrome profile 通常已登录面板,无需再登。
+3. 拉**逐日失败时间线**:`GET /api/logs` 树里该任务目录下每份日志 → `GET /api/logs/detail?file=<dir>/<file>` → 取日志尾 `## 完成 ✅ / ## 失败 ❌` + 第一条错误行。现成脚本 `scripts/ql_log_timeline.py --match <名字片段>`;一次就能答"从哪天开始坏、报什么错",比让用户回忆强得多。
+4. 结论按这个顺序说:任务在不在 → 从哪天起失败 → 根因 → **今晚已经修了什么** → 还需要用户做什么(如扫码)。不要把"连续失败"讲成"任务被删/没了"。
+
 ### 日志判读铁律:看结尾行,别看中间
 
 任务日志中间出现 `403 (Forbidden)`/`Response code 403`/`领取次数不足`/`火爆了跳出` **不代表故障** — 脚本在遍历子任务(签到/浏览/领奖),重复领取已领完的奖励被拒是正常流程,会继续跑下一个。唯一判据是**结尾行**:`## 完成 ✅` = 正常(中间有多少失败行都忽略);`## 失败 ❌(退出码 N)` = 真问题才查。扫日志先 `grep -E "完成 ✅|失败 ❌"` 定位结尾,再决定要不要看中间。
@@ -228,6 +237,13 @@ curl -s http://192.168.50.1:6700/api/run/<cron_id> \
 2. 命中批次用**二分法**砍(每次砍一半,留仍返回真数据的半边)→ 收敛到最小集合。
 3. 实测结果: **NodeSeek = `session=<40位>; smac=<ts>-<hash>`**(`pjwt` 那个 JWT 形态 cookie 实测不需要);带上即签到成功("今天的签到收益是5个鸡腿")。
 4. 两份转储对比时注意: 同名不同值会自动刷新(session/`__cf_ob`/`cf_clearance` 等),取 smac 时间戳更大的那份即可。
+5. **NodeSeek 凭证寿命与失效诊断 (2026-11-05 实测)**:
+   - **30天自然寿命**: `smac=<ts>-<hash>` 中的 `<ts>` 为 10 位 Unix 时间戳，记录 cookie 签发时间（`python3 -c "import datetime; print(datetime.datetime.fromtimestamp(<ts>))"` 可直查）。实测 10-02 抓取的凭据刚好在 11-02（第 31 天）自然失效。
+   - **`Expecting value: line 1 column 1 (char 0)` 报错根因**: 社区版脚本调用 `response.json()` 时未判断状态码。NodeSeek 前置 Cloudflare 保护，当带着已失效的 `session` 请求签到接口时，服务端会触发 Cloudflare 403 盾（返回 `<!DOCTYPE html>...<title>Just a moment...</title>`）或 303 跳转至 HTML 报错页；以 `<` 开头的 HTML 文本解析 JSON 就会报此错。
+   - **隔离探针定性**: 空 Cookie 或仅带 `smac` 请求返回 HTTP 200 正常放行，唯独带上该 `session` 时立刻被 Cloudflare 拒并返回 403 `Just a moment...`，即可 100% 确诊是 session 失效被 Cloudflare 拦截，而非 IP 墙或依赖缺失。
+   - **DevTools 双击截断坑**: `smac` 的完整格式为 `<10位ts>-<43位base64hash>`（如 `1793820177-1pbj_...`）。在浏览器 DevTools Cookies 表格中双击值时，连字符 `-` 会被当做单词边界，导致极易只复制到前半段时间戳而漏掉哈希签名！缺少后半段签名访问接口依然会被 403 盾拦截。提取时必须整格复制或从 Network 请求头 `Cookie:` 整行抽取。
+   - **凭据结构全集**: NodeSeek 完整 Cookie 包含 `session`（32位）、`smac`（54位）、`pjwt` 与 `cf_clearance`。将 Network 请求头整段 Cookie（含 clearance）填入 `NODESEEK_COOKIE` 最抗 Cloudflare 拦截。
+   - **脚本防御修补**: 在 `response.json()` 前增加 `if response.status_code == 403 or "Just a moment" in response.text:`，转为清晰提示「Cookie已失效或触发Cloudflare盾 (HTTP 403)」，避免上报未捕获异常。
 
 ### crond 真实链路的三个事实 (2026-10-02 实测, 2.22)
 
@@ -553,10 +569,31 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - `POST /qr` body `{}` → `data.session_id` + `data.image_url` = `/qr/<sid>/image`
 - `GET /qr/<sid>/image` = 二维码 JPEG(约 40-50KB);`GET /qr/<sid>/poll` 查扫码状态 —— 未扫时返回 502 `context deadline exceeded`(长轮询超时),别当故障。
 - 同一 openid 重扫会**更新原账号记录**,脚本 config.json 里的 openid 不用改;扫完用户要在手机上确认。
-- 二维码有 TTL,递给用户前现取一张新鲜的。
+- 二维码有 TTL(分钟级),递给用户前现取一张新鲜的;用户说「失效了/再来」就直接再 `POST /qr` 取新码,不用排查。
+- ⚠️ **扫错微信不报错,只静默换不出凭证**: `/accounts` 显示新账号 `alive`、`getCode` 也正常,但阿维塔 thirdLogin 回 `code=0` + `loginToken=null`。判据 = confirm 返回的 openid 与 config.json 里的不一致 → 用户扫的是另一个微信号。细节与隔离探针见 `references/yyb-go-wechat-login.md`。
 - 上游仓库有 `明确过期凭据账号需重新扫码` 一类提交,说明这就是官方预期处置方式;容器镜像老(如 08-31 构建)时可顺带 `git pull` 重建,但重扫才是根治。
 
+**「任务在跑、却什么都没签」的两层静默失败(同一根因)**:
+- 阿维塔:`❌ 连不上 YYB-Go…HTTP Error 502` + 退出码 1,日志尾 `## 失败 ❌` —— 老实报错。
+- 捷停车:`获取code失败 | 重试次数耗尽` 之后照样打印 `🎉 所有账号执行完成 / 成功: 0/1`,日志尾是 **`## 完成 ✅` 退出码 0** → 只看结尾行会误判"正常"。**判捷停车必须看中间**:`❌ 程序异常` 与 `成功: 0/1` 两行才是真相。
+- 依赖层:`❌ 程序异常: Using http2=True, but the 'h2' package is not installed.` = 容器里 httpx 已到 0.28 但 `h2` 没装。修复 `docker exec qinglong pip3 install --no-cache-dir "httpx[http2]" -i https://pypi.tuna.tsinghua.edu.cn/simple`(裸 `httpx` 不带 h2,必须 `[http2]` extra),装完在容器内验 `python3 -c "import h2,httpx; httpx.Client(http2=True)"`。装完仍 502 = YYB-Go 死号,别继续往依赖上查。
+
+**递二维码给用户时**: 现取一张(`POST /qr` → `GET /qr/<sid>/image` 落到本地文件),**用 vision 确认下载的是真二维码**(不是空白/报错页),再 `MEDIA:<绝对路径>` 发出去,并说清用哪个微信扫、扫完别退出登录。
+
 **分享版脚本依赖在容器重建后会丢**: 捷停车报「JWT库错误」其实是 jwt 模块压根没装(`pip3 uninstall jwt` 会说 not installed)→ 装 `pyjwt`;NodeSeek 签到报 `ModuleNotFoundError: No module named 'curl_cffi'` 同理。青龙容器升级/重建（如升至 2.23.0）会重置系统级 site-packages，需一并补齐：`docker exec qinglong pip3 install pyjwt "httpx[http2]" httpx-socks python-dotenv pycryptodome curl_cffi -i https://pypi.tuna.tsinghua.edu.cn/simple`，并在 `Dependences` 表（type=1）中补增记录。装完捷停车仍 502 = YYB-Go 账号问题,不是依赖。
+
+**捷停车的第二个独立故障(2026-11-11 实测)**: 日志 `❌ 程序异常: Using http2=True, but the 'h2' package is not installed` —— 容器里 httpx 有了但 h2 没装(httpcore 在、h2 缺)。修: `docker exec qinglong pip3 install --no-cache-dir "httpx[http2]" -i 清华源`,装完 `python3 -c "import h2,httpx;httpx.Client(http2=True)"` 验证。注意它是**另一个故障**,修完仍会回到 YYB-Go 502——别以为没修好。
+
+### YYB-Go 登录态巡检 + 强提醒(2026-11-11 建,任务 id 2368)
+
+阿维塔/捷停车 挂掉时面板上任务仍显示「启用/空闲」,只有日志里有 502,容易连挂 9 天没人发现(实测 11-03→11-11)。已建常驻巡检:
+
+- 脚本 `scripts/yyb_watch.py`(宿主 `/mnt/user/appdata/qinglong/scripts/`),任务 `task yyb_watch.py`,排期 `10 10,21 * * *`(10:10 / 21:10,分别覆盖 00:28 阿维塔与 09:00 捷停车之后)
+- 三层判据: ① `/health` 不通=服务层 ② `/wxapp/getCode` 返回 502=凭据层(要重扫码) ③ 阿维塔 `thirdLogin` 拿到 code 但 `loginToken` 为空(`bindAccountFlag=0`)=该微信未绑阿维塔(要先在小程序登录一次)
+- 正常时完全静默;异常推面板自己的 Telegram bot,带**连续异常天数**(状态文件 `.yyb_watch_state.json`,同日多次只算一天),一直到恢复
+- 参数: `--json`(单行 JSON,供别的 cron/Hermes 复用) `--no-push` `--force-push`
+- 通道事实(2026-11-11 实测): 50.110 上 `hermes send -t weixin` 需用户近期给 bot 发过消息,否则 `iLink sendmessage session not ready: ret=-2` 静默失败;`hermes send -t telegram` 在 110 **未配置**。所以巡检推送统一走青龙 config.sh 里的 TG bot(24/7 在 NAS 上跑),别指望微信通道当主告警。
+- 微信 iLink 通道只在用户刚发过消息的窗口内可用,写告警脚本时一律 try 微信→失败再 fallback TG。
 
 ## Pitfalls
 
@@ -564,6 +601,7 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 
 - **DNS 陷阱**: `50.1` 主机名在不同上下文解析到不同 IP（见 references/dns-quirks.md）。用 IP `192.168.50.1` 最可靠。
 - **登录状态**: API 需要 Bearer Token，未认证返回 401。浏览器访问需要登录。
+- **本地保存的 token 会过期**: `~/.config/qinglong/cli.json` 里的 token 常已失效(直接 401)→ 用 gbrain `credentials/qinglong` 的用户名密码 `POST /api/user/login` 现取一个,别改 cli.json、别猜密码、别把 token 打印进会话。
 - **curl 超时**: 容器启动慢，`curl` 可能 timeout，需要加大 timeout 参数。
 
 ## 文件索引
@@ -574,6 +612,7 @@ MS Rewards 签到容器等其它 cron 服务要推 telegram 时,复用青龙 con
 - `references/passwall-proxy-diagnosis.md` — 判断容器流量是否真走代理(国内外 IP 回显对比)+ PassWall 域名强制直连步骤(京东风控根因排查用)
 - `references/yyb-go-wechat-login.md` — YYB-Go(微信登录)部署 + 阿维塔/捷停车签到两案例:风控110000根因(绑错微信)、JWT字段漂移、config.json子目录隔离、静默失败调试法(2026-08-31)
 - `references/security-audit.md` — 青龙安全审计三步法(版本/暴露/入侵痕迹) + 2.20.2 红线含义 + 重装保数据事实 + 本机基线(2026-09-01)
+- `scripts/ql_log_timeline.py` — 任务逐日失败时间线(纯 stdlib): `--match avatr` / `--dirs avatr_sign jesting_jesting` 列出每份日志的 `OK/FAIL` 与首个错误行,用来回答「任务从哪天起坏」;自动从任务命令推出日志目录名,不打印凭证
 - `scripts/ql_stale_status.py` — 「运行中」残留体检/复位(无需宿主机 ssh): 列出 `pid` 非空或 `status=0`(运行中)的行,`--fix` 则在容器内逐行 `/proc/<pid>` 验活、备份 DB、把"进程已不存在"的行复位成 `status=1`(该任务启用)/`2`(该任务停用)+`pid=NULL`,并打出后续必做项(硬刷页面/删临时任务)
 - `scripts/ql_env_segment.py` — env 分段写入助手(纯 stdlib,凭证不回显): `--show` 只看 pin/长度结构、`--add 'pin=..;wskey=..;'` 按 pin 增/换某账号段、`--value` 整值覆盖;写前打旧结构、写后回读复核
 - `scripts/jd_ck_probe.py` — 写进 `JD_COOKIE` **之前**预检一条 JD 凭证: 从容器内打 `me-api` 判 200/1001,顺带识别 75 位网页版 vs 83 位 `app_open` App 版形态(互加前缀必失败),全程不打印凭证本体

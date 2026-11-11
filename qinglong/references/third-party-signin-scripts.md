@@ -67,3 +67,8 @@ schedule 相互错开 5-10 分钟,别全挤同一个点。
 ## 8. 凭据抓取(通用)
 
 cookie 类平台的通用抓法,给用户时直接照抄: 浏览器登录该站 → F12 → Network → 刷新 → 任选请求 → Request Headers 里的完整 `Cookie` 整串复制。多账号按脚本说明的分隔符(cookie 类常见换行或 `&`;注意库内不统一,仍以脚本 grep 结果为准)。
+
+## 9. 论坛/CF保护站脚本的 JSON 解析防崩
+
+社区脚本常见盲目 `response.json()`。当 Cookie 失效或触发 Cloudflare 盾时，接口常返回 HTTP 403 `<!DOCTYPE html>...` 或 303 重定向到 HTML 报错页，直接抛出 `Expecting value: line 1 column 1 (char 0)`。
+- **修复规范**: 在 `response.json()` 前先判断 `if response.status_code == 403 or "Just a moment" in response.text:`，返回明确的凭证失效/被拦截描述，再用 `try...except` 保护 `response.json()`，而不是把未捕获的 JSONDecodeError 原样推给通知。
