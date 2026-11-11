@@ -26,6 +26,7 @@
 | `cloudflare-workers-d1/` | 50.110 Windows bot | Workers + D1 侦察/配额分级；D1 用量按 SQL 归因（`d1QueriesAdaptiveGroups.query`），治本先加索引、不许升级套餐 |
 | `cloudflare-cf-cli/` | 50.110 Windows bot | Cloudflare 官方 `cf` CLI（覆盖 3000+ API）安装与使用：npm 默认拦 `workerd` postinstall 会让 `cf dev` 崩（`npm install-scripts approve workerd`）、env 变量鉴权（免浏览器）、两 token 分工（Workers token 打 D1 报 10000）、init→deploy→dev 实测流程；**含 npm 自升级坑**（prefix = node 自带 `lib/node_modules` 时 `npm i -g npm@X` 会 MODULE_NOT_FOUND 半死 → 用 tarball 手换 + 备份留 `node_modules` 外）与 npm prefix 跟 PATH 上 node 走的验证纪律 |
 | `hermes-cron-troubleshooting/` | 50.110 Windows bot | Hermes cron 没跑/投递失败诊断；**一次性 job 漏跑超 120s 会被删除**、工作与告警不能同一失效点 |
+| `llm-cost-scheduling/` | 50.110 Windows bot | DeepSeek 峰谷计价与省钱排期；**答末峰谷标签只在走官方直连 `api.deepseek.com` 时加，走中转池（Agent2API / CLIProxyAPI 等）一律不加**；标签必须 `scripts/dspeaktag.py` 现算，不许心算 |
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
 | `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
@@ -150,6 +151,7 @@ git push origin main
 | `cloudflare-workers-d1/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `cloudflare-cf-cli/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-cron-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `llm-cost-scheduling/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `ha-desktop-alerts/*` | 50.110 Windows bot（如有） | 50.161 不审 |
