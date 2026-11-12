@@ -1,6 +1,6 @@
 ---
 name: hermes-update-troubleshooting
-description: Use when Hermes update fails but CLI update works.
+description: Use when Hermes update fails, stalls, or app is stale.
 category: software-development
 ---
 
@@ -64,15 +64,29 @@ then `git fetch mirror refs/heads/main:refs/remotes/origin/main`. Identity and
 the update check stay intact (git still SHA-verifies every object) and the
 real update's fetch then has almost nothing to transfer.
 
-Related: a slow-but-progressing fetch is killed by the desktop hand-off's
-**600s silence watchdog** (`step stalled: no stdout/stderr for 600s`, exit
-code 124, update.log stops at `→ Fetching updates...`). Measure before
-blaming code: `git ls-remote origin` repeated 3x — 2s/30s/70s spread means the
-route, not the SSL backend. The 600s ceiling is overridable —
-`HERMES_UPDATE_STEP_IDLE_SECONDS` (and `HERMES_UPDATE_PIPE_DRAIN_SECONDS`),
-`scripts/desktop-update/windows.ps1:826-832`, undocumented and env-only (the
-Desktop must be restarted to inherit it). Raising it buys patience, never a
-route fix.
+Related: the desktop hand-off cancels any step that produces **no visible output**
+for **600s** (`step stalled: no stdout/stderr for 600s`, exit 124). Two very
+different situations look identical in the log, so **discriminate before blaming
+the network**. The updater's stdout is block-buffered and the hand-off stamps a
+whole run's output at the moment it flushes (usually the kill), so a silent
+`logs/update.log`, or a block of lines all sharing one timestamp, is **not**
+evidence of a hang. Check what actually happened:
+```bash
+stat -c '%y' <checkout>/.git/refs/remotes/origin/main    # when did the fetch land?
+time git fetch origin main                               # ~1s = objects already local
+git diff --name-only HEAD origin/main -- apps/desktop | wc -l   # big = long silent rebuild
+```
+(a) the fetch landed early in the run and a re-fetch is instant → the stall is
+**downstream** (npm / electron-builder / web build), the run is healthy-but-long,
+and the fix is patience: raise the ceiling.
+(b) the fetch never landed → it is the route/backend path above: `git ls-remote
+origin` repeated 3x — a 2s/30s/70s spread means the route, not the SSL backend.
+The ceiling is overridable — `HERMES_UPDATE_STEP_IDLE_SECONDS` (and
+`HERMES_UPDATE_PIPE_DRAIN_SECONDS`), `scripts/desktop-update/windows.ps1:826-832`,
+env-only and read by the hand-off process itself, so **set it in whatever spawns
+the hand-off and that run inherits it** (no Desktop restart needed). Raising it
+buys patience, never a route fix — and for a long healthy rebuild patience is
+exactly the fix.
 
 ## Failure mode 1: npm EBADENGINE (the "worked before, now fails" cause)
 
@@ -241,7 +255,7 @@ venv-blocker guard runs before the log stream opens. The evidence is in
 [updates] venv-blocker scan reported 1 holder(s); re-scanning after settle (attempt 2/3)
 [updates] venv-blocked: 1 process(es) hold the install
 [updates] error: Update aborted: another Hermes process is using this installation.
-[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe C:\Users\<user>\ha-doorbell\doorbell_watch.py
+[updates]   PID 5264  python.exe  ...\hermes-agent\venv\Scripts\python.exe C:\Users\ianle\ha-doorbell\doorbell_watch.py
 ```
 
 Any process whose interpreter is the Hermes venv **or**
@@ -258,7 +272,7 @@ uv venv --python "C:/Users/<user>/AppData/Local/Programs/Python/Python314/python
 uv pip install --python .venv/Scripts/python.exe websockets micloud pycryptodome requests
 # start_watcher.vbs: py = base & "\.venv\Scripts\python.exe" (+ system-python fallbacks)
 taskkill /PID <shim> /PID <child> /F
-powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"C:\Users\<user>\ha-doorbell\start_watcher.vbs\"'"
+powershell -NoProfile -Command "Start-Process wscript.exe -ArgumentList '\"C:\Users\ianle\ha-doorbell\start_watcher.vbs\"'"
 ```
 Notes: the venv `python.exe` shim + its `.hermes-runtime` child are ONE
 logical process (two PIDs, kill both), and the guard reports only the shim.
@@ -272,6 +286,9 @@ cd %LOCALAPPDATA%\hermes\hermes-agent
 ```
 `blocked: false` means the install is free — update normally (from the app
 while it runs; the app stops/relaunches its own `serve` backend).
+The supported read-only equivalent — no checkout venv needed, and it also names
+`serve`/`hermes <subcommand>` holders: `hermes update --list-venv-holders` → JSON
+`[{pid,exe,argv,kind}]`, exit 0 when free, 3 when held.
 
 ## Failure mode 6b: `git fetch timed out after 300s` (pure network, nothing local)
 
@@ -576,9 +593,12 @@ Leftovers to report honestly after such a run:
  stale `1` keeps a red card in front of a perfectly current checkout. It is written when
  a *partial* step fails (classically `Stopping 1 dashboard process(es) … could not be
  auto-restarted`) and only a later fully-successful gateway-mode completion rewrites it
- — `behind: 0` does not clear it. Judge success by `logs/update_receipts/latest.json` +
- `git rev-list --count HEAD..origin/main`, then finish with a run that has the desktop
- app CLOSED (`references/flaky-github-route-fallbacks.md` §4).
+ — `behind: 0` does not clear it, and finishing with a run that has the desktop app
+ CLOSED does not clear it either: a run that rebuilt the packaged app to HEAD and
+ relaunched it still ended with the flag rewritten to `1` during its own bookkeeping.
+ Judge success by `logs/update_receipts/latest.json` +
+ `git rev-list --count HEAD..origin/main` + `install-stamp.json` commit == HEAD, then
+ TELL the user the About card may still look red instead of chasing the flag.
  - **Passing a script to native Windows python needs a native path**: `python
    /d/x/y.py` becomes `C:\d\x\y.py` (MSYS mounting is not translated) → use
    `python D:/x/y.py`.
@@ -602,6 +622,219 @@ Upstream (report, do not patch): **#124794** (asking for
 desktop ~20 min + stuck git processes), #125683 (same tree:0 root cause in the
 plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
 
+### Agent-driven update that keeps the user's chat window (2026-10-04, 50.110)
+
+The desktop hand-off is the only path that rebuilds AND relaunches the packaged app, and
+the app itself spawns it job-object-safely. An agent can drive that same path instead of
+running the updater inline (which stops the app's `serve` backend and loses the turn):
+
+1. `git -C <checkout> fetch origin main` FIRST — 923 commits = **31 s**; a warm pack makes
+the updater's own 300 s-capped fetch trivial, and that fetch is the step that dead-stalls.
+   Also raise the idle ceiling **in the helper** (`$env:HERMES_UPDATE_STEP_IDLE_SECONDS =
+   '1800'` before spawning — children inherit it): a big jump legitimately runs silent past
+   600 s while the packaged desktop app is rebuilt, and the default ceiling kills exactly
+   that healthy run. Predict it with `git diff --name-only HEAD origin/main -- apps/desktop |
+   wc -l` — hundreds of changed files means a full electron-builder rebuild.
+2. Helper script that does, in order: spawn the hand-off exactly as the app does
+```
+start "" /b powershell -NoProfile -ExecutionPolicy Bypass -File <checkout>\scripts\desktop-update\windows.ps1
+  -InstallRoot <checkout> -Branch main -DesktopPid <electron MAIN pid> -RelaunchExe <Hermes.exe>
+```
+   (`Start-Process <shim.cmd> -WindowStyle Hidden`; main pid = the `Hermes.exe` whose parent
+   is not `Hermes.exe`), wait ~15 s, then `CloseMainWindow()` → force-stop after 6 s.
+3. Launch that helper so it survives the app dying. WMI is the cleanest escape from the
+   session's Job Object and returns the pid to verify against:
+```powershell
+Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{CommandLine='powershell.exe -NoProfile -ExecutionPolicy Bypass -File <helper>.ps1'}
+```
+   Put a **20-30 s sleep before any kill** so the agent's final chat message is delivered first.
+4. End the helper with a gateway check: once the hand-off log shows `hermes update exit code`,
+   if `gateway_state.json` is not `running` with a live pid, run
+   `schtasks /Run /TN Hermes_Gateway`. Every update that is killed mid-flight leaves the
+   gateway *stopped* (messaging down until someone notices), so the recovery must be part of
+   the job, not a thing to remember. Confirm the run landed before reporting success:
+   `behind 0` + `install-stamp.json` commit == HEAD. Verified: the helper outlives the session's death (its log kept writing
+   after the app died), and the hand-off it spawned ran to `exit code 0`.
+
+Result shape: `✓ Update complete! (v0.21.5+5827.g1a4508e → v0.21.5+6751.g9cf7960)`, desktop
+app rebuilt + relaunched (`desktop relaunched detached (pid …)`), gateway cold-started on the
+new sha, `behind 0`. Whole run ~5 min for 924 commits.
+
+### Rebuilding the packaged app needs the app CLOSED — hand it to a one-shot waiting task
+
+The packaged desktop app is only rebuilt by a run in which `Hermes.exe` is NOT running. An
+in-app run prints `⚠ Skipped rebuilding the desktop app: this update is running inside it
+(pid …), and Windows locks a running app's files.` and the Electron shell keeps serving old
+code although the checkout is at HEAD — `behind` stays `0`, so the gap is invisible from the
+update report. Measure it against the build stamp:
+```bash
+git -C <checkout> rev-parse HEAD
+cat <checkout>/apps/desktop/release/win-unpacked/resources/install-stamp.json   # "commit"
+git -C <checkout> diff --name-only <stamp-commit> origin/main -- apps/desktop | wc -l
+```
+
+An agent cannot close the app and keep working (its own `serve` backend is a child of it),
+so put the job in a **one-shot Scheduled Task**: it is owned by Task Scheduler rather than
+the app's Job Object, so it survives the app exiting and can relaunch it.
+```bash
+schtasks /Create /TN Hermes_FinishDesktopUpdate /SC ONCE /ST 23:58 /F /TR "wscript.exe //B D:\hermes-test\finish-desktop-update.vbs"   # VBS wrapper: a console action flashes a window (templates/hidden-task.vbs)
+schtasks /Run /TN Hermes_FinishDesktopUpdate
+schtasks /Query /TN Hermes_FinishDesktopUpdate /FO LIST   # wait for LastTaskResult 0
+schtasks /Delete /TN Hermes_FinishDesktopUpdate /F       # ONCE still fires at its ST time
+```
+`scripts/finish-desktop-update.ps1` is that script: poll until no `Hermes` process (up to a
+budget) → probe the git window (a probe slower than ~60 s means try later) → pre-warm `git
+fetch` → `hermes update --yes --gateway --force --branch main --keep-stash` → compare
+`install-stamp.json` commit with HEAD and run `hermes desktop --force-build --build-only`
+when stale → relaunch `Hermes.exe` → `hermes gateway status`. Verified end-to-end: app
+exited, probe 4.6 s, update pulled and rebuilt the packaged app (stamp == HEAD, new
+`Hermes.exe`), desktop relaunched, task exit 0. Keep the separate `Hermes_Gateway` task.
+
+Do not confuse this with the **installer** path: re-running `Hermes-Setup.exe` also rebuilds
+the packaged app, but it *pins* the commit that installer shipped with, so re-downloading it
+cannot advance the app past that build. Its history is `logs/bootstrap-installer.log`
+(`[OK] Hermes Agent install complete (pinned <sha>)`), with re-downloads appearing as
+`Hermes-Setup_2.exe` / `_3.exe`. When the user says "I re-ran the installer twice and the app
+is still old", read that log for a build in the reported window before theorizing: no entry =
+the installer never reached the build step, and an entry whose pinned sha equals the old HEAD
+explains an app that is old because that is genuinely what it built.
+
+### Mode 9b: the fetch's detached `git maintenance --auto --detach` holds the captured pipes
+
+Same symptom family as mode 9 (exit 124 / `step stalled: no stdout/stderr for 600s`, last
+update.log line `→ Fetching updates...`, gateway left `stopped`), but the TLS backend was
+already fixed (`http.sslbackend openssl` ×2 present) and a plain `git fetch origin main`
+answered in **0.97 s**. The proof came from `GIT_TRACE=<path>` set in the environment of the
+run, which shows git spawning a detached helper after every fetch round:
+```
+index-pack --stdin --fix-thin '--keep=fetch-pack <pid> on <host>' --promisor --pack_header=2,1212
+run_command: git maintenance run --auto --no-quiet --detach      <-- 4+ times in a 5 s window
+run_command: git -c fetch.negotiationAlgorithm=noop fetch origin --no-tags --no-write-fetch-head --recurse-submodules=no --filter=blob:none --stdin
+```
+`--detach` + inherited handles = a background process that keeps the updater's captured
+stdout/stderr pipes open. The updater's `_git_run(..., network=True)` waits for **pipe EOF**
+(`subprocess.run(capture_output=True, timeout=NETWORK_GIT_TIMEOUT_SECONDS)`), so the 300 s cap
+neither returns nor prints its `git fetch timed out after 300s` line — the call simply never
+comes back, `update.log` stops growing, and the hand-off's 600 s silence watchdog kills the
+tree. A *cold* backlog multiplies this: every lazy `--filter=blob:none --stdin` round spawns
+its own maintenance child, so the bigger the gap, the more likely the run parks forever.
+
+Check the local shape before blaming the route (all read-only):
+```bash
+git -C <checkout> config --get remote.origin.partialclonefilter     # blob:none on this box (tree:0 was converted)
+git -C <checkout> config --get remote.origin.promisor               # true
+echo "packs=$(ls <checkout>/.git/objects/pack/*.pack | wc -l) markers=$(ls <checkout>/.git/objects/pack/*.promisor | wc -l)"
+time git -C <checkout> fetch origin main                            # ~1 s = objects already local
+```
+`markers == packs` means the documented `should_include_obj` crash is NOT the active cause
+(doc: /docs/getting-started/updating → "Fetch fails with should_include_obj"; the fix is to
+create a `.promisor` file next to every pack **with Hermes closed**, and the doc explicitly
+warns NOT to remove `remote.origin.promisor` / `partialclonefilter` — a non-partial checkout
+then fails `git gc` with bad tree objects).
+
+**Proven cure (2/2 successes vs ~9 failures): keep the checkout warm.** A plain fetch right
+before the run — or periodically — makes the updater's own fetch degenerate to seconds with
+one or two lazy rounds, so the maintenance children are harmless:
+```bash
+# one-off, immediately before driving an update
+time git -C <checkout> fetch origin main
+```
+Durable version installed on this box: a per-user Scheduled Task that runs a plain
+`git fetch --quiet origin main` every 30 minutes, skipping when
+`$HERMES_HOME\.hermes-update-in-progress` exists so it can never race a real update.
+
+**Register it SILENT — a task whose action is a console program flashes a window on every
+run.** `schtasks /TR "powershell.exe …"` gives PowerShell a real console, so a 30-minute task
+blinks in front of the user all day and they will (rightly) object. Point the action at
+`wscript.exe //B <wrapper>.vbs`, whose `WScript.Shell.Run "<cmd>", 0, False` starts the real
+command with window style 0 (hidden); `//B` also suppresses wscript's own error dialogs. The
+machine's existing hidden tasks (`Hermes_Gateway`, `Hermes-BSOD-Notify`) use exactly this
+shape — match it. Starter file: `templates/hidden-task.vbs`.
+```bash
+# 1) copy templates/hidden-task.vbs, point it at the target script, keep it ASCII-only
+#    Set sh = CreateObject("WScript.Shell")
+#    sh.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ""<target>.ps1""", 0, False
+# 2) register + verify
+schtasks /Create /TN <Name> /TR "wscript.exe //B D:\hermes-test\<wrapper>.vbs" /SC MINUTE /MO 30 /F
+powershell -NoProfile -Command "(Get-ScheduledTask -TaskName '<Name>').Actions | Format-List Execute,Arguments"   # must read wscript.exe
+schtasks /Run /TN <Name>               # verify: log gains a line with behind=<N>, and no window appears
+schtasks /Delete /TN <Name> /F         # undo
+```
+Also persist the raised ceiling so the user's own About-button runs inherit it (the raised
+value only helps when the parent process has it; a Desktop launched by explorer does not):
+`setx HERMES_UPDATE_STEP_IDLE_SECONDS 1200`. Verified success shape after the warm prefetch
+(50.110, 2026-10-06 14:13→14:18, 5 min 34 s for 796 commits):
+`✓ Update complete! (v0.21.5+6751.g9cf7960 → v0.21.5+7547.g2061023)`, `hermes update exit code: 0`,
+desktop relaunched, `gateway_state.json` → `running` + new `code_sha`, `behind 0`.
+
+### Driving the hand-off by hand: close FIRST, start SECOND, verify the spawn
+
+Three ways to lose a whole attempt that all look like "nothing happened":
+
+- **The hand-off allows the Desktop only 30 s to exit**
+  (`Update aborted: the Hermes window (pid N) did not exit within 30s. Nothing was changed.
+  Close Hermes fully and try again.`). A helper that sleeps 20-30 s *before* closing the app
+  burns that budget. Order that works: kill/close the app **first**, then run the hand-off;
+  the hand-off tolerates a pid that is already gone. Keep the reply delay inside the closer,
+  not between the spawn and the close.
+- **`start "" /b powershell …` inside a console-less WMI process silently does nothing** —
+  the hand-off never starts and no `hand-off start:` line appears (2026-10-06 13:36: the app
+  was closed, nothing else happened, the window stayed dead for 32 min until the user
+  reopened it by hand). Spawn with `cmd.exe /c <script>.cmd` (the .cmd then calls powershell
+  in the foreground) and **verify the first `hand-off start:` line landed in the log before
+  closing the app or reporting anything**.
+- **PowerShell 5.1 + UTF-8 without BOM + Chinese text = parse error and instant exit.**
+  `Parser::ParseFile` on such a script returns 变量引用无效 (`Invalid variable reference`),
+  the process dies before its first log line, and the failure is silent unless you check.
+  Keep helper .ps1/.cmd files ASCII-only (comments too), or write them with a BOM.
+```bash
+powershell -NoProfile -Command "$e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile('<path>',[ref]$null,[ref]$e); if($e){$e|%{$_.Message}}else{'parse OK'}"
+```
+
+In PowerShell 5.1, `(Get-Date)` output in the log is locale-dependent mojibake — irrelevant,
+but do not read it as corruption of the file itself.
+
+### Never quote update.log's stale-stash warning as current state
+
+`⚠ N leftover update autostash entries` is an OLD run's line. On 2026-10-04 the 8 entries the
+10-01/10-02 runs warned about were **already gone** (`git stash list` → 0, no
+`.git/refs/stash`, no stash reflog), settled by a newer updater between 10-02 and 10-03 — and
+unrecoverable (no `hermes-update-autostash-*` commit among 52 688 unreachable commits from
+`git fsck --unreachable`). Run `git stash list` before promising the user a cleanup.
+
+## Mode 10: the daily cron auto-updater dies on a 60s `ls-remote` stall, and reports fake updates
+
+The 24/7 host (50.161) updates Hermes from `~/.hermes/scripts/auto_update_hermes.sh`
+(crontab `0 8 * * *`, log `~/.hermes/logs/auto_update.log`). Two failure shapes were
+both fixed there on 2026-11-13 — check them before debugging the updater itself:
+
+1. **60s stable-tag probe** — `hermes update` resolves the stable channel with
+   `git ls-remote --tags origin refs/tags/vX.Y.Z` under a hard 60s cap. One transient
+   stall ends the whole day:
+   `✗ Could not resolve the stable source channel: ... timed out after 60 seconds.
+   No update was applied.` The same command re-run 40 min later returns in ~1.2s — network
+   jitter, not config/credentials. The script now records attempt 1, sleeps 300s and
+   retries once; only two failures notify. Retrying is safe: `update` is a no-op when the
+   tree is unchanged, and when attempt 1 already pulled code but failed later (uv sync /
+   gateway restart) the retry just finishes the job.
+2. **"📦 已更新 N commits" with an unchanged SHA** — `origin/main` is thousands of commits
+   ahead of the last release tag, so `git rev-list --count HEAD..origin/main` looks alarming
+   while the **stable channel is already current**: `hermes update` exits 0 having changed
+   nothing, and the old script still pushed "已更新 4166 commits". Compare SHAs before
+   notifying (`NEW_SHA == LOCAL` → log `up-to-date（stable 通道 vX @ sha；origin/main 另有 N 个
+   未发布 commit，属正常）`, no push). `hermes update --check` is the oracle:
+   `✓ Up to date with the latest release (stable v0.23.1 (sha))`.
+
+Both branches were fault-injected before trusting them: a fake
+`VENV_HERMES/bin/hermes` that fails on call #1 and succeeds on #2 (log shows
+"第 1 次失败 → 300s 后重试 → 第 2 次成功", exactly one notification) and one that always
+fails ("连续两次返回非零"). Test harness on 50.161: `/tmp/rtest/` + `/tmp/test_retry.sh`
+(script copy with gbrain block cut out, `sleep 300`→3, `if true` forcing the update branch).
+
+Also set `export HERMES_HOME="${HERMES_HOME:-$HOME/.hermes}"` in that script: unset in cron,
+every run wasted lines on `[HERMES_HOME fallback] ... active profile is 'webui-hermes'`,
+which buries the real error.
+
 ## Fix ladder (in order)
 
 0. `grep -a "venv-blocked\|venv-blocker" %LOCALAPPDATA%\hermes\logs\desktop.log`
@@ -613,9 +846,11 @@ plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
    the holder is `python.exe`).
 1. Read `%LOCALAPPDATA%\hermes\logs\update.log` tail — identify which
    mode you're in (EBADENGINE / stash prompt / DB lock / actually OK).
-   Exit `124` + `step stalled … 600s` + last line `→ Fetching updates...` = mode 9's
-   network path: measure BOTH TLS backends and the route before touching anything else
-   (`references/flaky-github-route-fallbacks.md` §1-2).
+   Exit `124` + `step stalled … 600s` = mode 9's idle watchdog, but that does **not**
+   imply the network: first check `.git/refs/remotes/origin/main` mtime + `time git fetch
+   origin main` — fetch already landed / instant means the stall is downstream (a long
+   silent rebuild; raise `HERMES_UPDATE_STEP_IDLE_SECONDS`); fetch never landed means
+   measure BOTH TLS backends and the route (`references/flaky-github-route-fallbacks.md` §1-2).
 2. `npm --version` → if in a forbidden gap, `npm install -g npm@12`.
 3. `git -C %LOCALAPPDATA%\hermes\hermes-agent status --short` → if dirty,
    either clean it or expect the interactive prompt (use CLI, not app).
@@ -658,6 +893,12 @@ plugin-catalog path), #97394 (same idle-watchdog mechanism, closed).
 - The SQLite WAL-reset warning in update.log ("Hermes venv links SQLite
   ... has the WAL-reset bug → provisioning a private Python runtime")
   is auto-repaired by Hermes itself; no user action needed.
+- ❌ Do NOT register a Windows Scheduled Task with a console-program action
+  (`schtasks /TR "powershell.exe …"`, `cmd.exe`, `python.exe`): Task Scheduler gives it a real
+  console window, so any recurring task blinks in front of the user on every tick — they notice
+  and object. Wrap it: `wscript.exe //B <wrapper>.vbs` with `WScript.Shell.Run cmd, 0, False`
+  (hidden), then verify the action reads `wscript.exe` (`Get-ScheduledTask … .Actions`).
+  Starter: `templates/hidden-task.vbs`.
 - ❌ Do NOT open a new upstream issue before searching:
   `gh issue list --repo NousResearch/hermes-agent --search "<signature>" --state all`.
   Both Windows gateway bugs here (#123490, #122183) and the GBK decode crash

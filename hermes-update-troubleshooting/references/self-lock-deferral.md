@@ -74,7 +74,7 @@ From an EXTERNAL terminal (agent terminal is blocked by the live-checkout
 guard: "Blocked: `git pull` would rewrite Hermes's live source checkout"):
 
 ```
-cd C:\Users\<user>\AppData\Local\hermes\hermes-agent
+cd C:\Users\ianle\AppData\Local\hermes\hermes-agent
 git pull --ff-only origin main
 hermes update
 ```

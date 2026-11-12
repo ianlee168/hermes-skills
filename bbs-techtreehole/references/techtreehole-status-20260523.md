@@ -36,7 +36,7 @@ nodebb_redis 容器:
 4. 安装向导启动：`Web installer listening on http://0.0.0.0:4567`
 5. Redis 连接测试通过：`{"success":1,"dbfull":false}`
 
-### 剩余步骤（陛下操作）
+### 剩余步骤（用户操作）
 浏览器打开 `http://localhost:4567/`：
 1. Database Type 下拉框 → 选 "Redis"（当前是 MongoDB）
 2. 点击 "Install NodeBB" 按钮

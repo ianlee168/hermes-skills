@@ -4,7 +4,7 @@ category: self-hosted
 description: bbs.techtreehole.com 论坛（NodeBB）「科技树洞」部署、运维与故障排查。涵盖 Docker/Redis/Mongo 架构、NodeBB 安装向导、版本升级、403/500 排查、admin 密码重置、lucky 反代。
 version: 2.2.0
 author: ianlee168
-platforms: [linux]
+platforms: [linux, windows]
 tags: [nodebb, forum, techtreehole, redis, mongo, lucky, reverse-proxy]
 ---
 
@@ -17,15 +17,15 @@ tags: [nodebb, forum, techtreehole, redis, mongo, lucky, reverse-proxy]
 | 域名 | bbs.techtreehole.com |
 | 外网 URL | https://bbs.techtreehole.com:16666（DNS A 指向家宽**动态**公网 IP，会变——勿硬编，每次现查 `getent hosts bbs.techtreehole.com`；2026-10-08 实测 111.194.59.132，早前记录 123.114.199.136 已失效。端口 443 由 iStoreOS 自己占着（自签证书 + 对 RFC1918 源返 403），**不是** bbs 入口） |
 | 内网 URL | http://192.168.50.1:4567 |
-| 软件 | NodeBB v4.16.2（2026-10-13 升级，v4.15.1 → v4.16.2）；当前已为上游最新版 |
+| 软件 | NodeBB v4.16.7（2026-11-13 升级，v4.16.3 → v4.16.7）；当前已为上游最新版 |
 | 数据库 | MongoDB（容器 `nodebb-mongo`）+ Redis（容器 `nodebb-redis`），网络 `nodebb_nodebb-net` |
 | 反向代理 | iStoreOS 路由器（公网 IP **动态**，2026-10-08 实测 111.194.59.132，勿硬编）Lucky，暴露外网 16666 |
 | NAS SSH | root@192.168.50.1 / <PASSWORD_从_gbrain_获取> |
 | GitHub Issue | [#14296](https://github.com/NodeBB/NodeBB/issues/14296)（2026-05-29 Closed，官方确认已修） |
 | 管理员账号 | 用户名 `ianlee168` 或邮箱 `ianlee168@gmail.com`（**切勿填 admin，系统无此用户**） |
 | 小号账号 | 用户名 `iantechth`（uid 2，未绑定邮箱，密码与主号一致） |
-| 管理员后台 | `http://192.168.50.1:4567/admin` |
-| 管理密码 | `<ADMIN_PASSWORD_从_gbrain_获取>`（两个账号密码均为该值） |
+| 管理员后台 | `http://192.168.50.1:4567/admin` 或外网 `https://bbs.techtreehole.com:16666/admin` |
+| 管理密码 | `<ADMIN_PASSWORD_从_gbrain_获取>`（即 NAS root 密码末尾加英文感叹号 `<NAS_ROOT_PASSWORD_见_gbrain>`；已验证与数据库 bcrypt 匹配，两个账号均为此值） |
 | 邮件服务 | Resend（2026-10-13 替换 SendGrid，`email:from` = `ianlee168@techtreehole.com`） |
 | Resend SMTP 用户名 | `resend`（固定值） |
 | Resend SMTP 端口 | 587（STARTTLS） |
@@ -97,6 +97,8 @@ networks:
 ```
 
 ⚠️ **entrypoint 从 `/opt/config/config.json` 读取配置**，不是 `/usr/src/app/config.json`。
+
+⚠️ **匿名卷泄漏坑**：`ghcr.io/nodebb/nodebb` 官方 Dockerfile 内置声明了 `VOLUME ["/usr/src/app/node_modules", "/usr/src/app/build", ...]`。若 compose 中未显式映射具名卷，每次容器重建（升级、重启、构建）都会在 `/var/lib/docker/volumes/` 下生成新的 64 位哈希匿名卷（每个约 550MB）。累积数百个后会吃爆 `docker.img`。建议在 compose 中声明具名卷复用（如 `nodebb_build:/usr/src/app/build` 和 `nodebb_modules:/usr/src/app/node_modules`）。
 
 ## 全新安装流程
 
@@ -277,6 +279,9 @@ docker compose up -d
 # 等待约 60-90 秒
 docker logs -f nodebb # 观察 "NodeBB Upgrade Complete!" 和 "NodeBB Ready"
 
+# 4.5 清理本次重建遗留的 64 位无用匿名卷（Dockerfile 内置 VOLUME 每次生成 ~550MB 卷，避免累积写满 docker.img）
+docker volume ls -q -f 'dangling=true' | grep -E '^[0-9a-f]{64}$' | xargs -r docker volume rm 2>/dev/null
+
 # 5. 端到端健康检查
 curl -s -o /dev/null -w 'Index HTTP %{http_code}\n' http://192.168.50.1:4567/
 curl -s -o /dev/null -w 'Login HTTP %{http_code}\n' http://192.168.50.1:4567/login
@@ -289,6 +294,45 @@ curl -s http://192.168.50.1:4567/ | grep -o '<title>.*</title>'
 - 实测 2026-08-23 v4.12.0→v4.15.1：compose up 后自动跑了 3 个迁移（activitypubFilterList→core blocklist、backfill trust_proxy、web_push subscriptions→endpoint keys），输出 `NodeBB Upgrade Complete!`
 - **不要**用 `docker compose run --rm --entrypoint "" nodebb env CONFIG=... node nodebb upgrade`——绕过 entrypoint 会导致 CONFIG 环境变量未设置，NodeBB 找不到配置直接进 web installer（EADDRINUSE: 4567）
 - 验证迁移是否完成：`docker logs nodebb | grep -E "Upgrading|Upgrade Complete"`
+
+### 升级时「第一次 npm install 报 EACCES → 容器自动重启后成功」是正常收敛，别当失败
+
+2026-11-13 4.16.3 → 4.16.7 实测日志形状：
+
+```
+package.json was updated. Upgrading...
+Dependencies outdated or not yet installed. Error Code: DEP_WRONG_VERSION
+npm error code EACCES   path /usr/src/app/node_modules/.nodebb-theme-persona-ITN2IXPX/package.json
+Error installing dependencies!  → Failed to build NodeBB. Exiting...   # 第一轮退出
+（RestartCount=1，容器被 restart:unless-stopped 拉起，第二轮）
+installing... added 1 package, removed 3 packages, changed 26 packages
+Updating NodeBB... → 1..5 步 → NodeBB Upgrade Complete! → 🎉 NodeBB Ready   # 真正成功
+```
+
+根因：compose 里没有为 `/usr/src/app/node_modules` 声明具名卷，Docker 的匿名卷在
+`compose up` 重建容器时被 Compose **沿用**，里面留着上一次以 root 跑的半截 install
+残留目录（`.nodebb-theme-persona-XXXXXX`，root:root）。容器里 NodeBB 以 uid 1001 跑，
+`npm install` 想 unlink 这个 root 文件 → EACCES → 第一轮必失败。
+
+处理（不删东西，先挪走再验证）：
+```bash
+docker exec -u 0 nodebb mv /usr/src/app/node_modules/.nodebb-theme-persona-* /tmp/stale-persona-$(date +%Y%m%d_%H%M%S)
+docker exec nodebb npm install --omit=dev >/dev/null 2>&1; echo "rc=$?"   # 期望 rc=0
+```
+不做这一步也能用（第二轮已装齐、站点 200），但下次重建容器会再走一遍「失败 → 重启 → 成功」，
+碰上第二轮也失败就是半夜站点躺平。彻底解决要在 compose 里给 `node_modules` / `build` 声明**具名卷**。
+
+### 分级验证：hashed 资源名，别拿裸路径误报 404
+
+NodeBB 4.x 的静态资源带内容指纹，页面里引用的是 `/assets/nodebb.min.js?v=28e1ddd7655` 这种。
+直接 curl `/assets/client.js`、`/assets/nodebb.min.css` **必然 404**（9 字节），这不是构建失败。
+正确做法：从首页 HTML 里抽真实 URL 再打：
+```bash
+curl -s http://192.168.50.1:4567/ | grep -oE '/assets/[^"'"'"' ]+' | sort -u | head
+# 然后逐个 curl -o /dev/null -w '%{http_code} %{size_download}\n' —— 期望 200 + 数百 KB
+```
+同理 `/topic/1`、`/uid/1`、`/category/1` 返回 307/308 是**跳转到带 slug 的规范 URL**，
+加 `-L` 才是 200；只看裸状态码会把正常站点判成坏的。
 
 ### 手动 `./nodebb upgrade`（仅当 entrypoint 未自动跑时才需要）
 
@@ -953,4 +997,4 @@ enabled = 1                              # ← 关键！不设这个不走 SMTP
 
 ## 操作铁律
 
-⚠️ **任何涉及数据删除的操作（rm -rf、容器重建、数据库删除）必须先问陛下。** 能改配置解决的问题绝不删数据重建。操作前记录当前状态，留好 undo 路径。
+⚠️ **任何涉及数据删除的操作（rm -rf、容器重建、数据库删除）必须先问用户。** 能改配置解决的问题绝不删数据重建。操作前记录当前状态，留好 undo 路径。
