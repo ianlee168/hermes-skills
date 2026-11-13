@@ -168,11 +168,48 @@ fastest closed loop (that is how the `aspect_ratio` bug was pinned: measured car
 
 - 判断是否重复：`/api/states` 里同名成对出现（一份带 `_2`）；精确对法 = 两个 entry_id 之外
   的 `unique_id` 部分完全相同（`<MAC>-<entry_id>-<index>`）。
-- ⚠️ **不要随手删掉其中一个 entry**：base 与 `_2` 归属是**混的**（实测 `light.lemesh_...` 的
-  base 属旧 entry，`switch.xiaomi_x10a_...` 的 base 属新 entry），删任一份都会让一批
-  `entity_id` 改名 → 引用了这些实体的自动化/仪表盘会静默失效。清理要一步一验：先导出
-  `.storage/core.entity_registry` + `core.config_entries` 备份，删后按需重建 `entity_id`
-  （registry 里可直接改 `entity_id`），再逐条 diff 仪表盘/自动化引用。
+- ⚠️ **不要随手删掉其中一个 entry**：base 与 `_2` 归属是**混的**（实测有的设备 base 属旧 entry、
+  有的属新 entry），删任一份都会让一批 `entity_id` 消失。**正确姿势 = 删「引用少的那个」+ 把配置里
+  指向被删名字的引用改指幸存名字；只要幸存者名字在配置里被引用得少，就能把改动压到最小。**
+- ⚠️ 删 entry 前必须先算清「配置文件到底引用了哪些实体」，**别用 `/api/states` 或
+  `core.restore_state` 当引用源**（它们包含全部实体，会把 57 条真实引用放大成 465 条，结论完全相反）。
+  真实引用源只有：`configuration.yaml` / `automations.yaml` / `scenes.yaml` / `scripts.yaml` /
+  `button_card_templates.yaml` / `dashboards/*.yaml` / `.storage/lovelace.*`。
+
+### 去重复 entry 的已验证流程（2026-11-13 实测：572→324 实体，不可用 16→8）
+
+```bash
+# 0) 快照（本地 + HA 内各一份，HA 内那份放 /config/.hermes-backup-<date>/.storage/）
+#    core.config_entries / core.entity_registry / core.device_registry / lovelace.* / scenes.yaml / dashboards
+# 1) 算引用：遍历上面那 7 类文件，取所有 {domain}.{object} token 里属于 xiaomi_miot 的集合；
+#    按 config_entry_id 分组 → 得到「每个 entry 被引用了多少个实体」
+#    （实测 44 vs 13 → 删 13 的那份）
+# 2) 对每个被引用且将被删的实体名，找它的 twin（unique_id 去掉 config_entry_id 后相同）：
+#      twin 名是「不带后缀的基名」而将删的是 `_2` → 改配置文本（文本替换）
+#      twin 名是 `_2` 而将删的是基名       → 先删 entry（腾出基名）再 WS 改名 twin → 基名（配置零改动）
+# 3) 删 entry（REST，返回 {"require_restart":false}）：
+curl -X DELETE -H "Authorization: Bearer $TOKEN" \
+  "http://<HA>/api/config/config_entries/entry/<entry_id>"
+# 4) storage 模式仪表盘**不能改文件**（HA 内存里有副本，改文件既不生效又会被覆写）→ 走 WebSocket：
+#    {"type":"lovelace/config","url_path":"lovelace"} 取 → 递归替换字符串 → 
+#    {"type":"lovelace/config/save","url_path":"lovelace","config":...}
+#    ⚠️ url_path 不等于 id：3d_plan 的 url_path 是 "3d-plan"、xiaoshi_test 是 "xiaoshi-test"
+# 5) 改实体名同理走 WS：{"type":"config/entity_registry/update","entity_id":"old","new_entity_id":"new"}
+# 6) 场景热加载：POST /api/services/scene/reload（200 即可）
+```
+
+验收（缺一条都别收工）：
+```bash
+# 实体数：states 572→324、registry 1137→889、unavailable 16→8（正好减半 = 每台设备只剩一份）
+# 只剩一个 xiaomi_miot entry 且 state=loaded
+curl -s -H "Authorization: Bearer $TOKEN" http://<HA>/api/config/config_entries/entry
+# 三个仪表盘 WS get 全部 success=true；配置里引用的实体逐个在 /api/states 里存在
+```
+⚠️ 验收时「配置里引用的实体不存在」要先分清**本次引入**还是**历史遗留**：本次改动前先把
+`/api/states` 抓一份存好，改完对比 `pre` 集合即可（实测 8 条缺失全是删除前就已不存在的旧卡片：
+`loock_t1pro`、`xiaomi_rd08`、`sensor.weather_aqi_daily`）。
+⚠️ 回滚面：被删 entry 的实体/设备注册项一起消失，只能**停机**后把 `.storage` 快照换回去（或重新在
+UI 加一次集成）——所以第 0 步的快照是唯一的 undo。
 - 因此**告警判据要按设备去重**再比：50.161 的 `~/.hermes/scripts/ha_daily_check.sh`
   已改成「`_2` 结尾且同名 base 也在不可用集合里时只数 base」，并加了绝对下限
   `HA_UNAVAIL_FLOOR`（默认 20）：基线只有 8 台时，任何一两个设备抖动都会让旧版
