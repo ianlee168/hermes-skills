@@ -28,6 +28,7 @@
 | `hermes-cron-troubleshooting/` | 50.110 Windows bot | Hermes cron 没跑/投递失败诊断；**一次性 job 漏跑超 120s 会被删除**、工作与告警不能同一失效点 |
 | `llm-cost-scheduling/` | 50.110 Windows bot | DeepSeek 峰谷计价与省钱排期；**答末峰谷标签只在走官方直连 `api.deepseek.com` 时加，走中转池（Agent2API / CLIProxyAPI 等）一律不加**；标签必须 `scripts/dspeaktag.py` 现算，不许心算 |
 | `home-assistant-api/` | 50.110 Windows bot | HA REST/WS 接入与操作:令牌只在 gbrain,地址必须写全,写后回读验证 |
+| `home-assistant-ops/` | 50.110 Windows bot | HA 应用层运维:探针阶梯(可见≠可控制)、令牌只在 gbrain、`/api/states` 判读、**同一小米账号登两次 → 实体与不可用数翻倍**、`ha_daily_check.sh` 告警判据(按设备去重 + 绝对下限) |
 | `hermes-windows-bash-quirks/` | 50.110 Windows bot | Windows/MSYS 终端生存手册:门卫 9 类 block 的应对、路径翻译坑、目录 junction、测试/临时文件禁落 C 盘(默认落点 `D:\hermes-test`) |
 | `laya-decision-engine/` | 50.110 Windows bot | Laya 决策引擎(PyPI `laya`)安装与使用:Windows torch 只有 CPU 版必须钉 `+cuXXX`、HF/pip 缓存禁止落 C 盘、温度未拟合=置信度不可信、英文 checkpoint 非拉丁语静默崩、中文 noul 实测偏弱(通用) |
 | `laya-guard/` | 50.161 webui-hermes bot（Windows 支持文件由 50.110 补） | 三层前置护栏(本地 Laya + 窄正则 + 云端 Jev 复核)的完整部署包;**通用版:任意机器/OS 照 `INSTALL.md` 走**,零硬编;改阈值或 `patterns.py` 后必重跑 `calibrate.py`;云端 key 只放目标机 600 文件,仓里永不放。**Windows 补充**:`WINDOWS-NOTES.md`(50.110 落地实测 + 两个 Windows bug + 清单哈希的 CRLF 坑)、`laya-guard.windows.vbs`(wscript 无窗口启动)、`install-windows-task.ps1`(登录触发计划任务,注意 `ExecutionTimeLimit` 默认 3 天会掐死常驻服务) |
@@ -158,6 +159,7 @@ git push origin main
 | `windows-bsod-watchdog/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `laya-decision-engine/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `home-assistant-api/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `home-assistant-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-windows-bash-quirks/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `qinglong/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `microsoft-rewards-signin/*` | 50.110 Windows bot（如有） | 50.161 不审 |
