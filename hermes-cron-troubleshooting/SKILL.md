@@ -471,6 +471,14 @@ md5sum x.sh                                                  # 4 两侧一致才
 
 ## 微信 iLink 专属坑
 
+- **NAS 上的 Hermes VM(161)已把微信通道默认关掉(2026-11-13)**: `weixin_notify.py` 默认 telegram-only,
+  要发微信需显式 `WEIXIN_SEND=1` 或 `--weixin`。原因: 那台机器调 `send_weixin_direct` 每次必抛
+  `AttributeError: 'NoneType' object has no attribute 'ClientSession'`, 告警靠 Telegram 兜底才落地,
+  且"微信直发 + Telegram 兜底"两段式一次告警要试两条通道、日志天天噪声。
+  同批把 unraid 日检的两段式改成**单次调用** `weixin_notify.py`(pending 队列由它自己写), frigate 的日志标签改成中性的 `[通知]`。
+  排错时看到 `[Weixin] FAILED` / `[WeChat 通知失败]` 先确认是哪台机器 —— 按机器分工本机(Windows)走微信, VM 走 telegram,
+  **别把"微信不通"当成故障去修通道**。
+
 - `hermes send` **非 --json 模式失败时退出码 1 且 stdout/stderr 全空**(错误只在 --json 里)
   → 任何包了 hermes send 的脚本必须用 --json 并解析 error, 否则诊断抓瞎。
 - **`ret=-2 errmsg=prepare failed`（会话未就绪）**:
