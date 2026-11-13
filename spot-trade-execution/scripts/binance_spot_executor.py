@@ -26,7 +26,7 @@ import urllib.parse
 import urllib.request
 
 BASE = "https://api.binance.com"
-KEYFILE = r"D:\<workspace>\.bnb_key.json"
+KEYFILE = r"D:\hermes-test\.bnb_key.json"
 
 MAX_TRADE_USD = 157.0
 MAX_POSITIONS = 2

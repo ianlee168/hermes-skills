@@ -60,15 +60,25 @@ metadata:
 - 撤单：`DELETE /api/v3/order` 用 `orderId` 或 `origClientOrderId`；**OCO 要用 `DELETE /api/v3/orderList` 带 `orderListId`**，按单腿 `orderId` 会报 order does not exist。
 - **XRP 有储备**：币安 XRP 余额里约 10 XRP 是储备（reserve），卖全额会报 `-2010 insufficient balance`，要按 `free - 10` 下，剩下的卖掉不动。
 - **低于最小成交额卖不掉**：USDC 3 USD 这类零头会因 `minNotional` 5 USD 直接报废，别反复重试；无现货交易对的（SOLO、ETHW）也只能留着。
-- 现成执行器：`D:\<workspace>\binance_trade.py`（= 本 skill 的 `scripts/binance_spot_executor.py`；caps 内置，`buy/open/balance/price/cancel` 子命令；凭据 `D:\<workspace>\.bnb_key.json`，用完撤）。
+- 现成执行器：`D:\hermes-test\binance_trade.py`（= 本 skill 的 `scripts/binance_spot_executor.py`；caps 内置，`buy/open/balance/price/cancel` 子命令；凭据 `D:\hermes-test\.bnb_key.json`，用完撤）。
 
 ## 告警与日报架构（50.110 下单 / 50.161 24/7 推送）
 
 - **下单与对账只能在 50.110**：API key 的 IP 白名单绑死本机出口 IP，161 查不到账户。
 - **告警跑在 50.161**（24/7，只看公开行情，不需要 key）：`~/trading/vmon.py` + crontab `*/5`；持仓表靠 50.110 的 `positions.json` scp 过去（执行器下单后自动同步，日报也会同步一次）。
 - 告警档位：仓位偏离 3/4.5/6%（用户 2026-11-08 定的起报线 3%，之前 1.5% 太吵）、距止损/止盈 <1%、15 分钟 ≥3% 急拉急杀、合计浮亏 ≥5 USD；`alert_state.json` 做档位去重（同档 30 分钟冷却、回落 6 小时才重报）。
-- Telegram 推送：50.161 的 `~/.hermes/.env` 里有 `TELEGRAM_BOT_TOKEN`（bot `<bot-name>`），chat_id 在 `~/.hermes/.channel_directory_*.tmp`。50.110 没有 telegram token，要推就从 110 `ssh 161 "python3 vmon.py --send-text '<text>'"`。
+- Telegram 推送：50.161 的 `~/.hermes/.env` 里有 `TELEGRAM_BOT_TOKEN`（bot `yongggbot`），chat_id 在 `~/.hermes/.channel_directory_*.tmp`。50.110 没有 telegram token，要推就从 110 `ssh 161 "python3 vmon.py --send-text '<text>'"`。
 - 每日简报 cron 在 50.110（01:00，`daily_pnl_report.py`），因为要读私有账户；脚本自己 ssh 到 161 推 Telegram，同时在 chat 里留一份。
+- **简报脚本必须对每个数据源单独降级，一个接口抖动不能整份不报**（2026-11-13 01:00 真实事故）：
+  `openOrders` 单次抖动返回 `{"error":{...},"status":500}`，调用方直接 `for o in legs: o["symbol"]`
+  → 遍历字典拿到的是键名字符串 → `TypeError: string indices must be integers` → 整轮 exit 1，
+  当天简报直接消失（cron 只记 `last_status=error`，用户什么都收不到）。
+  修法：`api()` 只读调用 4 次退避重试 + 每个取数点在拿到非预期类型时打 warn 并降级
+  （openOrders 当无挂单、account 当「取不到资产」、报价失败不再按 0 静默计入）。
+- **漏掉的某天可回补**：`python daily_pnl_report.py --date 2026-11-12 --no-telegram`
+  （`--date` 只算那天窗口、**不写 pnl_snapshot.json**，否则「较上次快照」的基线会被历史日期污染）。
+- **投递时间会飘，不是故障**：01:00 时机器常处于关机（11-09 21:45 关 → 11-10 19:00 开、11-11 16:26 才开），
+  Hermes cron 在开机后补跑，于是简报 19:01 / 16:26 才到，标题仍是正确的「前一天全天」（窗口按日期算，不按运行时刻算）。
 - 机器可用时段：50.110 只排 15:00-01:00 的 cron，01:42-08:55 关机 —— 夜间监控必须放 161。
 
 ## 坑
