@@ -10,6 +10,7 @@
 | `gbrain-backup/` | 50.161 webui-hermes bot | 改 `backup.sh` 前看 `references/cron-setup.md`（如有） |
 | `gbrain-ops/` | 50.161 webui-hermes bot | 14 节踩坑清单，本机专属 |
 | `cloudflare-access/` | 50.161 webui-hermes bot | R2 token 创脚本，本机 rclone 路径专属 |
+| `tool-maintenance/` | 50.110 Windows bot | gbrain/hindsight 升级与记忆分层 runbook；升级前先查 `bun --version` ≥1.4.4 |
 | `switch-model-m1-m3/` | 50.110 Windows bot | 改 `config.yaml` 路径需自己适配本机 Hermes 配置 |
 | `smart-home/` | 50.1 Unraid bot（NAS 端） | go2rtc / Frigate 配置，Unraid 路径专属 |
 | `istoreos-passwall-update/` | 50.110 Windows bot | PassWall 升级流程，路由器专属 |
@@ -144,6 +145,7 @@ git push origin main
 | `istoreos-passwall-update/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `istoreos-istore-package-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `skill-github-mirror/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `tool-maintenance/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
