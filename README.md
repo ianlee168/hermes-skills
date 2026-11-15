@@ -45,6 +45,7 @@
 | `3commas-mcp/` | 50.110 Windows bot | 3commas 官方 MCP/REST 接入（`mcp.trade.3commas.io/mcp`，头 `X-API-Key`/`X-Secret-Key`）、网页建 key 的 5 组读写权限矩阵、有 IP 才永不过期、`mcp>=2.3` 客户端改名坑（`streamable_http_client` + `create_mcp_http_client`）、17 个工具清单、套餐价格与「Free 不能交易」、2FA 必查；凭证只在 gbrain |
 | `spot-trade-execution/` | 50.110 Windows bot | 真钱现货下单的硬风控：caps 写进代码、OCO 必须 tick/step 取整、假熔断（按均价法算已实现 PnL）、挂单锁仓要 free+locked 估值、资金账户与现货分层；执行器凭据 `D:\hermes-test\.bnb_key.json`。**真钱单每笔都要当轮授权** |
 | `web-page-fault-triage/` | 50.110 Windows bot | 网页故障分诊（「是他们的问题还是我浏览器的问题」）：用真实登录态复现，抓 `POST /api` 的 4xx + 响应体 message 定性；易支付类网关「商户订单号已存在」= 聚合侧重复单；`references/browser-network-forensics.md` 有 XHR/fetch 拦截器现成代码 |
+| `cartoon-story-video/` | 50.110 Windows bot | 段子/故事→卡通小视频的纯本地流水线（edge-tts 旁白 + PIL 逐帧矢量卡通 + ffmpeg 编码/配乐/响度归一）；无生图 API 依赖，换故事只改台词与场景 painter |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
@@ -156,6 +157,7 @@ git push origin main
 | `hermes-cron-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `llm-cost-scheduling/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `smart-home/*` | 50.1 Unraid bot（如有） | 50.161 不审 |
+| `cartoon-story-video/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `unraid-server-ops/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `ha-desktop-alerts/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-bsod-watchdog/*` | 50.110 Windows bot（如有） | 50.161 不审 |
