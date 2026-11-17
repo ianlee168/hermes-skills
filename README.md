@@ -47,6 +47,7 @@
 | `web-page-fault-triage/` | 50.110 Windows bot | 网页故障分诊（「是他们的问题还是我浏览器的问题」）：用真实登录态复现，抓 `POST /api` 的 4xx + 响应体 message 定性；易支付类网关「商户订单号已存在」= 聚合侧重复单；`references/browser-network-forensics.md` 有 XHR/fetch 拦截器现成代码 |
 | `cartoon-story-video/` | 50.110 Windows bot | 段子/故事→卡通小视频的纯本地流水线（edge-tts 旁白 + PIL 逐帧矢量卡通 + ffmpeg 编码/配乐/响度归一）；无生图 API 依赖，换故事只改台词与场景 painter |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
+| `windows-fan-rpm-telemetry/` | 50.110 Windows bot | 读真实风扇 RPM/温度（替代 HWiNFO 免费版 12h 共享内存上限）：LibreHardwareMonitor 便携版 + `data.json` HTTP 端点；**设置文件是 `LibreHardwareMonitor.config`（不是 `.exe.config`）**、`netstat` 显示 PID 4 属正常（http.sys）、风扇通道靠短时 CPU 负载相关法映射 |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
 
@@ -148,6 +149,7 @@ git push origin main
 | `skill-github-mirror/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `tool-maintenance/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `windows-fan-rpm-telemetry/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
