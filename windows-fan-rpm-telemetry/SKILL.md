@@ -89,6 +89,34 @@ Interpretation:
 - GPU fans at `0 RPM` with the GPU at ~30 W and `P3` = zero-fan idle; a noisy machine with
   0 % GPU fan is never the graphics card.
 
+## Gigabyte GCC's Fan module is NOT a reliable control path (measured 2026-11-17)
+
+On a B850M AORUS ELITE WIFI7 ICE-P (ITE IT8696E) GCC's Fan page **loads and displays**
+`<Control Center>\Fan\Profile-0.xml` correctly (SmartFanMode / StairStepMode / RpmFixedMode
+per header, X = degC, Y = duty*255/100) but its **套用 (Apply) button did nothing twice**,
+in two different ways:
+
+- first apply: EC duties dropped to the 27% floor while the CPU was at 67 degC and climbed to
+  69 degC (the curve should have asked for ~72%) - i.e. it applied with a wrong temperature source;
+- second apply: EC duties did not change at all for 20 s and `Profile-0.xml` mtime never moved
+  (GCC never persists an apply, so a reboot reverts to the BIOS curve).
+
+Consequence: never present GCC as the durable answer. Editing `Profile-0.xml` directly is safe
+and does get picked up by the UI, but it is not a control path on its own. The durable options are
+the **BIOS Smart Fan 6** curve (survives reboots, authoritative at POST; Gigabyte AMI path:
+Del -> Easy Mode "Smart Fan 6", or F2 -> Tweaker -> Smart Fan 6; per header set Fan Control =
+Manual, Fan Stop = Disabled, then the temp/duty points) or a startup daemon that writes PWM
+itself. Also note GCC is a High-integrity process: computer_use input to it returns
+`background_uipi_blocked`, so its GUI cannot be automated from the agent at all.
+
+### Verified end state worth recognising
+
+With the BIOS curve set to 33% at 40 degC / 39% at 50 / 49% at 60 / 100% at 70 (CPU header) and
+35/49/100% at 40/50/60 degC (case headers): idle duty self-adjusts ~42-44% (1100 RPM / CPU 52 degC),
+an 8-thread burn ramps to 100% (2368 / 1776 / 2015 RPM) with the CPU plateauing at 83-84 degC, and
+it drops back to 42% within 15 s after the load ends. Duty that *changes with temperature* while
+no daemon is running is the proof that the firmware - not software - owns the fans.
+
 ## Reporting to the user
 
 State GPU fan % and temp first (settles "is it the graphics card?" in one line), then the
