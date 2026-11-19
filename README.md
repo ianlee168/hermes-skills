@@ -39,6 +39,7 @@
 | `bbs-techtreehole/` | 50.161 webui-hermes bot | bbs.techtreehole.com 论坛运维：NodeBB 4.16.2 部署升级、Resend SMTP 发信、Lucky 反代；凭据只在 gbrain，仓内零明文 |
 | `cliproxyapi-gateway/` | 50.110 Windows bot | CLIProxyAPI 网关 + CPAMC 面板运维：v8 配置布局、上游 base-url 必须裸域名、`auth-files` vs `api-keys` 两套凭证别混、配额来源是 OAuth 账号不是 AI Studio free key、管理密钥问一次 `gbrain get tools/<app>-<host>` 就够（别先通读 skill 再走验证阶梯）；内网 IP 保留，凭证只在 gbrain |
 | `windows-portable-app-upgrade/` | 50.110 Windows bot | 便携/绿色版软件无损升级：注册表无 App Paths/Uninstall 即判定便携版、用户数据 vs 厂商数据库的判别法、`/downloads/<base64>=` 常是壳页要捞 CDN 直链、**launcher `.bat` 必须纯 ASCII 且 CRLF**（`chcp 65001` 救不了中文 bat，实测把用户坑出满屏 `'/Y' 不是内部或外部命令`）、退出才回写 ini 的程序靠 launcher 补最后一次同步；`references/aida64-extreme.md` 为 AIDA64 实例 |
+| `windows-port-squat-popup/` | 50.110 Windows bot | 程序反复自动弹窗/端口“假死”：遗留 `netsh portproxy` 抢占 IPv4:端口转发到死地址(iphlpsvc 持有,`netstat` 同端口两个 PID)，探活脚本硬编码 127.0.0.1 必超时→每 N 分钟拉起 GUI 主程序保活→GUI 先建窗口再 focus 已有实例=弹窗；修法=探活改 localhost/[::1]+隐藏启动 serve 子命令，提权删残骸规则 |
 | `dsh-desktop-runtime-repair/` | 50.110 Windows bot | DeepSeek Harness 桌面端启动崩溃（`ENOENT resources/runtime/...`）：根因是 NSIS 更新包 payload 里的 runtime 未写全，从 updater 缓存的 `$PLUGINSDIR/app-64.7z` 补 6144 个文件即可，不必重装；含整盘对比与验收判据 |
 | `lan-photo-import/` | 50.110 Windows bot | 两台 Windows / 手机之间局域网搬照片：浏览器直传服务（`server.py`+`app.html`+启停 bat）；防火墙按**程序路径**放行（Public 配置文件）、bat 必须 CRLF、MSYS 里 `cmd //c "中文名.bat"` 不执行 |
 | `exchange-api-connectivity/` | 50.110 Windows bot | 交易所 API 连不上（3commas 报 `Authentication Error. Invalid API Key.`）：三市场同报=key 级问题、平台抽屉里取当年 IP 全量清单、币安「默认安全控制措施」会把「允许合约」锁灰、headless 过不了 Cloudflare 要起可视化 Chrome；凭证只在 gbrain |
@@ -151,6 +152,7 @@ git push origin main
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-fan-rpm-telemetry/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `windows-port-squat-popup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
 | `cloudflare-d1-row-read-blowup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
