@@ -507,6 +507,8 @@ Key facts:
 
 **判活**:`logread | grep "===C0===" | tail -1` 的时间戳不再前进 + `ps w | grep "[c]loudflared"` 为空 = 循环停了(别用 `logread | grep -c`,它统计的是历史累计)。
 
+**先查清"这条隧道到底在给谁干活"再决定修不修**:① token base64 解出 `{"a":账号,"t":隧道ID,"s":密钥}`;② 拿**本机** `~/.cloudflared/cert.pem` 跑 `cloudflared tunnel list`,看该 ID 是否在这个账号的清单里 —— 不在 = token 天生无效(建在别的账号或已删),面板上重新生成也救不回这条;③ 对 DNS 查它打算暴露的域名:解析到**用户家宽 WAN IP** = 一直是 Lucky/DDNS 在干活,隧道零流量 = **可以整条拆掉**。2026-11-24 实测案例:隧道 ID 不在账号内(账号只有 Hermes01/bbs-nodebb/ianlee168),`cpa`/`bbs` 域名均指向家宽 IP,确诊后用户同意 → `mv` 整套到 `/root/trash-cloudflared-<时间戳>/`(留回滚面,二进制随时可重下)。
+
 ## passwall 国内延迟排查（2026-08-14 实测，全链路结论：系统正常）
 
 症状：用户报"国内 ping 高、以前 2 位数"。完整诊断阶梯见 `references/passwall-domestic-latency.md`。要点：
