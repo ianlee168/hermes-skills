@@ -13,10 +13,12 @@ dmesg | grep "Previous system reset reason"
 | 值 | 含义 | 结论 |
 |---|---|---|
 | `0x08000800` … `an uncorrected error caused a data fabric sync flood event` | CPU↔内存↔PCIe 互连出现不可纠正错误，硬件保护机制**立即复位整机** | **硬件级复位**，OS 没有任何机会写日志 |
-| `0x00080800` … `software wrote 0x6 to reset control register 0xCF9` | 软件写复位寄存器 = 「重启」命令走的路径 | 正常重启 |
+| `0x00080800` … `software wrote 0x6 to reset control register 0xCF9` | 软件写复位寄存器 = 「重启」命令走的路径 | 计划内/软件发起的重启 |
 | `0x00200800` | 正常 ACPI 关机后开机 | 正常 |
 
 **判据价值**：同一次故障如果反复出现，这个寄存器给出的是一串可对比的历史。若历史全是 `0x00080800`、只有最新一次是 `0x08000800`，那这次是这台机器第一次硬件级复位 —— 和「OS 升级引入回归」是两回事，回滚治不了。
+
+看 `0x00080800` 时问题就只剩两个：**谁在什么时候、为什么重启**（见 §7），以及服务有没有全回来。
 
 ## 2. 崩溃前日志：默认已丢，必须先开镜像
 
@@ -93,6 +95,35 @@ bash /boot/custom/scripts/boot-reset-reason.sh >/dev/null 2>&1 &
 ## 6. 重启这台机的副作用
 
 50.1 上跑着 iStoreOS 软路由 VM + 全部容器，重启 = **全屋断网 2–3 分钟**。内核参数要重启才生效时，先说清影响并约定时间窗口，不要默不作声重启。
+
+## 7. 远端日报说「宿主重启过」——怎么在 5 分钟内定性
+
+巡检脚本靠 `/proc/uptime` 回退发现重启，**最多滞后一整个检查周期**，所以消息里的「时间」是**检查时刻**，不是重启时刻（实例：宿主 11-12 11:26 重启，11-13 08:05 的日报才发现，消息却标着 11-13 08:05）。
+
+- 巡检脚本要把**事件自己的时刻**抄进正文 —— `who -b` 的引导时间（远端命令里 `who -b` 输出 ` system boot  Nov 12 11:26`，本地用 `sed -E 's/.*boot[[:space:]]+//'` 提时间）+ 复位原因寄存器原句。只报「重启过」而不报「何时重启」，用户和你都会读成「刚刚发生」。
+- 前次在线天数与 `/boot/logs/reset-history.log` 最后一行的 boot 时间要能对上 —— 对不上说明中间还重启过。
+
+### OS 更新型重启的取证链（`0x00080800` 最常见的原因）
+
+syslog 镜像开着时，**重启前那一整段日志在 `/boot/logs/syslog-previous`**（不是 `/var/log/syslog.1` —— 后者只剩新 boot 的内容，会让你误判「没有关机记录」）：
+
+```bash
+grep -nE "webgui: Successful login|plugin-manager: .*(unRAIDServer|installed)|shutting down for system reboot" /boot/logs/syslog-previous | tail
+grep -nE "rc.6: Running shutdown|Compose Manager Shutdown|Forcing shutdown|unclean" /boot/logs/syslog-previous | tail
+cat /etc/unraid-version; ls -la /boot/bzimage /boot/previous
+```
+
+一次「装了新 OS 再重启激活」的完整证据形状（每一步都能在这两个文件里定位）：
+
+1. `webgui: Successful login user root from <LAN_IP>` —— 谁在 WebUI 里操作的（**能定位到操作源 IP**）。
+2. `plugin-manager: creating: /tmp/unRAIDServer.zip - downloading from URL https://stable.dl.unraid.net/<ver>/…` → 若干分钟后 `plugin-manager: unRAIDServer.plg installed` —— OS 包已落到 flash（这时 `/boot/bzimage` 的 mtime 就是它的写入时刻）。
+3. `shutdown[N]: shutting down for system reboot` + `init: Switching to runlevel: 6` —— 标准 reboot 路径（这就是 `0x00080800` 的来源）。
+4. `rc.6: Running shutdown script` + `compose.manager: Compose Manager Shutdown … Stack X stopped` + `Generating diagnostics` —— **优雅关机**（缺 `emhttpd: unclean shutdown detected` 才算干净）。
+5. 下一行时间戳跳到新 boot，`dmesg` 里内核版本已是新版，`/etc/unraid-version` 与 `/boot/changes.txt` 版本对齐。
+
+回归检查（不要只看 `docker ps`）：`virsh list --all`（每台 VM 都 running）、`docker ps -q | wc -l`（容器数与重启前一致）、关键服务端口 `curl -o /dev/null -w '%{http_code}'`（如 HA 8123 → 200）、`cat /proc/mdstat`（阵列已起）。
+
+⚠️ 复跑那个巡检脚本验文案时，它末端会真的发通知 —— 把状态文件指到 `/tmp` 临时路径，并先找禁用通知的开关；没有开关就**事后如实告知用户「测了一条，里面 X 是编的」**（细则见 skill `hermes-cron-troubleshooting`）。
 
 ## 参考
 

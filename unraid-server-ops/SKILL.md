@@ -435,7 +435,7 @@ Measured from the server's domestic broadband (download fine, upstream throttled
 
 ## Local LAN backup — rclone SFTP pull to the Windows host (2026-08-06, THE working route for big data)
 
-The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\ianle\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
+The user's chosen target is the Windows host's **F: drive (3.7T, ~1.2T free)**. Pull over SSH with Windows rclone — no server-side changes, no SMB. Server needs nothing; local rclone v1.74 is already at `C:\Users\<user>\AppData\Local\Microsoft\WinGet\Packages\Rclone.Rclone_...\rclone-*\rclone.exe` (in PATH).
 
 ```bash
 rclone config create unraid sftp host 192.168.50.1 user root key_file "C:/Users/<user>/.ssh/id_rsa"
@@ -445,7 +445,7 @@ rclone copy unraid:/mnt/cache/domains "F:/unraid-backup/domains" --stats 30s -v 
 ```
 
 - **Speed ~64-71 MiB/s** (gigabit LAN incl. SSH overhead) → 287G ≈ 75 min. qBittorrent `ipc-socket` errors (`SSH_FX_FAILURE`) are normal — runtime socket, not a real file; ignore.
-- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/ianle/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
+- **Windows rclone rejects MSYS paths in config values**: `key_file /c/Users/<user>/.ssh/id_rsa` → "failed to read private key file ... The system cannot find the path specified". Use native `C:/Users/<user>/.ssh/id_rsa`. Also: Windows rclone reads `%APPDATA%\rclone\rclone.conf`, NOT WSL's `~/.config/rclone` — `rclone listremotes` on the Windows side shows NOTHING even though WSL has `gbrain_r2`.
 - **Sparse-file caveat**: SFTP backend has no sparse handling — a vdisk tree that `du`s 357G but is logically 664G transfers as 664G. F: drive must fit LOGICAL size; ETA ≈ 2.5-3h, not 1.2h.
 - **Consistency**: copying a RUNNING VM's vdisk = hot copy (restore may need fsck). Clean backup = stop VM → re-run `rclone copy` (incremental, only the delta, minutes) → start VM. NEVER stop `openwrt` if it is the soft-router — the whole LAN dies.
 
@@ -492,8 +492,20 @@ Key facts:
 - `mount -o ro` FAILS on ext4 with a dirty journal → add `noload` (mount then shows `type ext4 (ro,...,norecovery)`).
 - openwrt root = overlayfs: read-only squashfs (another partition) + writable `upper/` on ext4. Configs are in `upper/etc/config/`; `upper/etc` ≈ 65M, tar.gz ≈ 30M (includes plugin data). The overlay structure (`upper/`/`work/` + `.rootfs-uuid`) is what you see mounted — the configs are NOT at `/etc/` of the mount.
 - qcow2 overlay chain (base + delta, e.g. `istore_fixed.20260511_Stable_Baseqcow2` + `istore_fixed.qcow2`) is handled transparently by `qemu-img convert`.
-- iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 <NAS_ROOT_PASSWORD_见_gbrain>**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
+- iStoreOS network facts: VM name `iStoreOS`, MAC 52:54:00:f4:25:61 → 192.168.50.5 (find via `virsh dumpxml` MAC + `ip neigh`). **SSH IS available: dropbear 端口 64891, root，密钥免密（本机 `~/.ssh/id_ed25519` 公钥已写入 authorized_keys，2026-08-12）+ 密码 <见 gbrain>**；端口 22 是关的。LuCI on 80/443（WebUI 另走 Lucky 反代 :16601/ianlee168/）。
   ⚠️ **50.5 的访问凭证（SSH 端口/密钥/密码）、HA 备份密码、小米账号等都在 gbrain `concepts/net-topology` 页面（2026-08-12 用户批准存脑）—— 问用户要密码之前先查脑库！**（2026-08-14 用户亲训："昨天不是告诉你50.5的密码了吗？怎么又问"）
+
+## 50.5 cloudflared 崩溃循环 + token 失效(2026-11-24 实测)
+
+症状:`logread` 里 `cloudflared` 每 5 秒重刷一段 help 文本(`--grace-period value` 之类),`logread | grep -c cloudflared` 上百行,`ps` 却抓不到进程 = procd 在按 `respawn` 秒级重启一个秒死的实例。
+
+两层错,必须分开判:
+1. **命令行错了 → 打 help 秒退**。`cloudflared tunnel --no-autoupdate --token-file /root/cf_token run` 中 `--token-file` 不是 `tunnel` 的全局 flag,它会 `Incorrect Usage. flag provided but not defined: -token-file` 然后打完整 help。正确两种:`cloudflared tunnel --no-autoupdate run --token-file /root/cf_token`(flag 放在 `run` 后),或 `TUNNEL_TOKEN=$(cat /root/cf_token) ... run`。
+2. **token 本身无效 → `ERR Register tunnel error from server side error="Unauthorized: Tunnel not found"`**。这条只能靠 Cloudflare 面板重新生成 connector token,agent 无法自愈;别以为是配置/网络问题反复改脚本。
+
+处置:`/etc/init.d/cloudflared disable && stop` 先止住 5 秒级刷日志(保留二进制与 token 文件不动);同时把 init 脚本里的调试 `echo ===C0===` 之类全部清掉(它们会跟着每次 respawn 灌爆 logread)。改前 `cp /etc/init.d/cloudflared /root/cloudflared.init.bak-$(date +%Y%m%d-%H%M%S)`。
+
+**判活**:`logread | grep "===C0===" | tail -1` 的时间戳不再前进 + `ps w | grep "[c]loudflared"` 为空 = 循环停了(别用 `logread | grep -c`,它统计的是历史累计)。
 
 ## passwall 国内延迟排查（2026-08-14 实测，全链路结论：系统正常）
 
@@ -526,12 +538,12 @@ Watchdog (installed 2026-08-12): `/boot/custom/scripts/go2rtc-watchdog.sh` runs 
 - **新形态:重启 go2rtc 也没用**。日志反复 `cs2: pop buffer is full` + `probe: miss: read media: ... i/o timeout`(TCP 能连上摄像头 192.168.50.66,但 P2P 媒体读不到)= **摄像头端 P2P 会话卡死**,不是凭据 401。排查顺序:
   1. `docker logs --since 6m go2rtc | grep -iE "xiaomi|401|i/o timeout|buffer"` 区分 401(凭据)vs i/o timeout(摄像头端会话)
   2. 先让用户**重启摄像头**(拔电 10 秒 / 米家 App),重置 P2P 会话
-  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"1291104493": "q1w2e3r4"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
+  3. 不行就**换凭据**(最终修法,2026-08-27 实测)。⚠️ **配置里直接放明文密码(`"<小米账号>": "<小米密码>"`)不够**——小米风控触发时照样 401。真正可靠的是 **WebUI 登录流程**:浏览器开 `http://192.168.50.1:1986` → add → Xiaomi → 填手机号+密码 → login → **弹短信验证码框(captcha + send 按钮),让用户在手机上收验证码,报给助手填入**(这一步 agent 只能点 send,验证码在用户手机;小米风控正是 401 深层原因)→ 登录成功后 **go2rtc 自动生成全新 V1 令牌并写回 go2rtc.yaml**。
 - ⚠️ **PITFALL:WebUI 保存/登录会重写 go2rtc.yaml 并清空 `streams:` 节**(实测:登录后配置文件只剩 14 行,cw300 定义丢失 → 流全断,快照冻结)。**WebUI 操作前必须 `cp go2rtc.yaml go2rtc.yaml.bak-$(date +%Y%m%d-%H%M%S)`**,操作后核对 streams 节,丢了就从备份补回:
   ```yaml
   streams:
     cw300:
-      - "xiaomi://1291104493:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
+      - "xiaomi://<小米账号>:cn@192.168.50.66?did=1079924977&model=mxiang.camera.moc001&retries=60&timeout=30s"
   ```
   然后 `docker restart go2rtc`。注意 URL 里的 `&` 在 sed append 文本里无需转义,在替换串里要写成 `\&`。
 - **验证要过硬(2026-08-27 教训,用户原话"修好的p啊")**:快照字节数相同 ≠ 恢复(冻结帧可能返回完全相同字节,51KB 两次一致是假象)。**唯一硬证据 = `curl -s http://127.0.0.1:1986/api/streams`**,producer 显示 `remote_addr: 192.168.50.66:<port>` + `bytes`/`packets` 持续增长 + 最近 2 分钟 401 计数为 0,才宣布恢复。
@@ -793,6 +805,35 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 - **安全前提(升级前必查)**:新版安装脚本只 `mkdir -p projects` + 清 `compose.manager-package-*` 遗留包条目,**不碰 `projects/*/docker-compose.yml`**;仍要 `cp compose.manager.plg compose.manager.plg.bak-<date>` 并确认 projects 内容。自带 compose CLI 在 `/usr/lib/docker/cli-plugins/docker-compose`(`docker compose version` 可验)。
 - 迁移后它的自动更新会跟着新 pluginURL 走(若在 ca.update.applications 的列表里)。
 
+## Unraid WebUI 弹报错 → 先 grep 文案定位是哪个插件发的(别按界面位置猜)
+
+用户说的「在 Docker 页面提示 X」里的 X **未必是原生 Docker 页发的** —— 所有 WebUI 文案都在各插件自己的 JS/PHP 里。第一步永远是反向定位:
+
+```bash
+ssh root@192.168.50.1 'grep -rl "<报错原文里的几个词>" /usr/local/emhttp /usr/local/unraid-api 2>/dev/null'
+```
+
+命中插件的 JS 后,看 `swal({...})` 旁边的 `action:` 名 → 进该插件的 `include/Exec.php` 找 `case '<action>':` → 得到它真正读写的那个文件。**别一看到「container / docker」字样就往 docker.img、`unraid-update-status.json`、容器重建方向查** —— 那会把一个几 KB 的缓存文件问题放大成运维事故。
+
+### compose.manager「Container metadata unavailable / Syntax error. Existing metadata has been retained…」
+
+- 来源 = **compose.manager 插件**(Docker 区里的 Compose 栈管理页)的 `loadPersistentContainerCache()`;缓存文件 `/boot/config/plugins/compose.manager/containers.cache.json`(`Defines.php` 的 `COMPOSE_CONTAINER_CACHE_FILE`)。它只是 UI 元数据(图标 / 状态 / `hasUpdate` 证据),**丢了不影响任何容器运行**。
+- 根因签名:无文件锁的旧版在并发写(多标签、页面重载时的自动检查)下把两份 JSON 交错写进同一文件 → 出现 `}"database": {` 这种「两个项目边界挤在一行」,`json_decode` 报 `Syntax error`。新版加了 `flock` + `begin()/merge()` 每项目 32 位 generation token,正是根治此症;报这个错时先看 `/var/log/plugins/compose.manager.plg` 的 `version` 是否已升级,别急着改代码。
+- 修法(等价界面上的「清除更新缓存」,无损):先按时间戳备份,再写合法空 v1 缓存,让页面下次加载从 `docker inspect` 重灌:
+  ```bash
+  cd /boot/config/plugins/compose.manager
+  cp -p containers.cache.json containers.cache.json.corrupt-$(date +%Y%m%d-%H%M)
+  php -r 'file_put_contents("containers.cache.json", json_encode(["version"=>1,"projects"=>(object)[],"owners"=>(object)[]], JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)."\n");'
+  ```
+- 验收用**插件自己的读函数**,比「文件能解码」强得多:
+  ```bash
+  cd /usr/local/emhttp/plugins/compose.manager/include
+  php -r 'require "Defines.php"; foreach (["ContainerInfo.php","ContainerMetadataCache.php"] as $f) if (is_file($f)) require $f; echo "READ OK projects=", count(ContainerMetadataCache::read()), "\n";'
+  ```
+- **别把这种拼接损坏当成 U 盘坏了**:判据 = `dmesg | grep -iE "fsck.fat|sda1"`(开机 fsck 无报错)+ `df -h /boot`(有空间)+ 在目录里 `touch` 写测试成功 → FAT 正常,只是那一个文件被并发写坏。别顺手去 chkdsk / 换 U 盘。
+- **往 /boot 写 JSON 的姿势**:Unraid 无 python3;`ssh 'printf "{\n ...}" > f'` 里的 `\n` 常常原样落盘,写出非法 JSON —— 反而让「文件坏了」的诊断自我实现。一律用 `php -r 'file_put_contents(..., json_encode(...))'` 写,写完立刻 `php -r 'json_decode(file_get_contents(...)); echo json_last_error_msg();'` 验(它会明确报 `Syntax error`)。
+- 修完只需让用户**刷新 Compose 页面**(不用重启插件、不用重启容器):页面加载时会重新灌满元数据。告知用户时明确说「栈/容器完全没动过」,这是他最关心的点。
+
 ## WTR PRO BIOS 刷写与改写实战铁律（2026-10 实测）
 
 - **外设连接**：**压根用不到插鼠标，只插一个 USB 键盘即可**。UEFI Shell 全自动跑脚本，BIOS 界面纯靠方向键 + Enter + Esc + F4，千万别让用户多事翻找/插拔鼠标。
@@ -816,29 +857,21 @@ ls /var/log/packages/ | grep compose         # 旧的 compose.manager-package-* 
 
 全流程（寄存器判读表、syslog 镜像命令行配方、缓解参数表、BIOS/memtest/AGESA 顺序、论坛结论）：`references/unexpected-reboot-forensics.md`。
 
-### 日报里的「宿主重启过」——消息的"时间"是**检查时间**，不是重启时间
+### 日报说「宿主重启过」——先读 "何时重启"，再定性
 
-50.161 的 `unraid_daily_check.sh`（cron `5 8 * * *`）靠 `/proc/uptime` 回退发现重启，**最多滞后 24 小时**。实例（2026-11-13 08:05 报的那条）：NAS 实际重启在 11-12 11:26，11-12 08:05 那轮 NAS 还活着 → 11-13 08:05 才发现，消息却标着 11-13 08:05，极易被读成"今早重启的"。
+巡检脚本靠 uptime 回退发现重启，**最多滞后一整个检查周期**，所以消息里的「时间」是**检查时刻**，
+不是重启时刻（实例：宿主 11-12 11:26 重启，11-13 08:05 的日报才发现）。
 
-- 2026-11-13 起脚本已把 `who -b` 的真实引导时刻写进正文：`宿主重启过（前次在线 16.6d），实际引导于 Nov 12 11:26｜类型: 软件复位…`。看到这种消息先读这句再定性。
-- **`0x00080800 software wrote 0x6 to 0xCF9` = 计划内/软件发起的 reboot**，处置只有两步：查明谁在何时为何重启，然后确认服务回归。
+- 巡检脚本必须把**事件自己的时刻**（远端 `who -b` 的引导时间）和复位原因原句抄进正文 ——
+  只报「重启过」不报「何时重启」，用户和你都会读成「刚刚发生」。
+- `0x00080800 … software wrote 0x6 to 0xCF9` = **计划内/软件发起的 reboot**，处置只有两步：
+  查明谁在何时为何重启（`/boot/logs/syslog-previous` 里的 `webgui: Successful login` +
+  `plugin-manager: … unRAIDServer` 安装行 + `shutting down for system reboot`），再确认服务全回归
+  （`virsh list --all` / 容器数 / 关键端口 / `/proc/mdstat`，别只看 `docker ps`）。
+- ⚠️ 复跑这类自带发送逻辑的巡检脚本 = **真的会给用户发一条消息**；状态文件指到 `/tmp`，并事后如实告知测试数据的性质。
 
-### OS 更新型重启的取证链（5 分钟确认「计划内」）
-
-syslog 镜像开着（`rsyslog.cfg` 里 `syslog_flash="1"`）时，重启前那段日志在 **`/boot/logs/syslog-previous`**（不是 `/var/log/syslog.1`，后者只剩新 boot 的内容）：
-
-```bash
-grep -nE "webgui: Successful login|plugin-manager: .*(unRAIDServer|installed)|shutting down for system reboot" /boot/logs/syslog-previous | tail
-grep -nE "rc.6: Running shutdown|Compose Manager Shutdown|Forcing shutdown|unclean" /boot/logs/syslog-previous | tail
-cat /etc/unraid-version; ls -la /boot/bzimage /boot/previous
-```
-
-2026-11-12 那次的完整证据链：`10:19:17 webgui: Successful login user root from 192.168.50.5` → `10:19:40 plugin-manager 下载 unRAIDServer-7.4.0` → `10:28:42 安装完成` → `11:21:56 shutting down for system reboot` → `11:25 Compose Manager 停 3 个栈 + 生成 diagnostics` → `11:26:47 新内核启动（6.18.60-Unraid / Unraid 7.4.0）`。结论：**用户在 WebUI 装机 7.4.0 后重启激活，全程优雅**；前次在线 10-26 17:01 → 11-12 11:26 = 16.6d，与告警数字一致。
-
-回归检查（别只看 `docker ps`）：`virsh list --all`（iStoreOS/Hermes/Home Assistant 全 running）、`docker ps -q | wc -l`（20 个）、`curl -s -o /dev/null -w '%{http_code}' http://192.168.50.206:8123/`（200）、`cat /proc/mdstat`。
-
-⚠️ 复跑这个脚本验文案时**必须**把状态文件指向临时路径，否则它真会推一条告警（实测会发 telegram）：
-`printf '3000000 x 0 0\n' > /tmp/ut.state; UNRAID_STATE_FILE=/tmp/ut.state bash ~/.hermes/scripts/unraid_daily_check.sh` —— 测试消息里的"前次在线 Xd"是编的，别当真。
+完整的 5 分钟取证链（三条 grep、OS 更新型重启的五步证据形状、优雅关机判据、回归清单）：
+见 `references/unexpected-reboot-forensics.md` §7。
 
 ## Agent2API(Unraid Docker)部署 + loopback OAuth 坑(2026-11-11 实测)
 
@@ -868,4 +901,4 @@ cat /etc/unraid-version; ls -la /boot/bzimage /boot/previous
 - `references/ha-dashboard-file-ops.md` — HA 仪表盘/卡片运维: 匿名 SMB 入口与备份纪律、YAML 模式三个坑 + include 缓存、**storage 模式走 `lovelace/config/save`**、**破损卡片三查(底图 `/local/`→`/config/www/` 映射 / 实体存在性 / 落点叠图)**、验收清单(WS 解析/字节对比/PIL 预览)+ 「用户想自己拖位置」的本地拖拽编辑器实现与 yaml 解析坑。
 - `references/new-docker-app-install.md` — 从上游镜像装新应用的落地脚手架:摸底命令、后台拉取与存活判据、Unraid 模板 XML 骨架(端口/路径/设备/变量 + ExtraParams)、自启文件、应用自带 doctor/scan 验收阶梯、媒体库"数据库前缀 ↔ 容器挂载"两表映射实例、SMB 投片目录。
 - `references/plugin-inventory-and-removal.md` — Unraid 插件户:本机判决表(必须留 / 可删 / 已迁移 + 复核依据)、卸载后验证清单与"要不要重启"判据、判硬件驱动插件有没有用(modprobe + hwmon + md5)、只读挂 bzmodules/bzfirmware 对比原厂的姿势与三个假阴性(未压缩 cpio、链式 cpio 早停、find maxdepth 截断)。
-- `references/unexpected-reboot-forensics.md` — 意外重启取证:AMD `S5_RESET_STATUS` 判 `0x08000800`(data fabric sync flood=硬件级复位) vs `0x00080800`(软复位)、syslog 镜像命令行配方、`processor.max_cstate=1`/NVMe APST/ASPM 三个缓解参数、混插内存与 BIOS/memtest/AGESA 处置顺序、为什么不要先回滚版本。
+- `references/unexpected-reboot-forensics.md` — 意外重启取证:AMD `S5_RESET_STATUS` 判 `0x08000800`(data fabric sync flood=硬件级复位) vs `0x00080800`(软复位)、syslog 镜像命令行配方、`processor.max_cstate=1`/NVMe APST/ASPM 三个缓解参数、混插内存与 BIOS/memtest/AGESA 处置顺序、为什么不要先回滚版本;**§7 = 日报说「宿主重启过」时的 5 分钟定性(事件时刻 vs 检查时刻、`/boot/logs/syslog-previous` 取证链、OS 更新型重启的五步证据形状、优雅关机判据、回归清单)**。
