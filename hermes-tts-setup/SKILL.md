@@ -69,6 +69,15 @@ Run these in order; the first one that succeeds fixes the problem.
 
 6. **Verify end-to-end** with the `text_to_speech` tool. Or run `scripts/verify_tts.py`.
 
+## Local standalone TTS install for non-Hermes agents (Antigravity / CLI agents on this PC)
+
+There is a self-contained edge-tts install that does **not** depend on the Hermes venv, so IDE/CLI agents can call it directly:
+
+- `D:\tools\agy-tts\tts.py` + private venv `D:\tools\agy-tts\.venv` (Python 3.11, `edge-tts`; ~6 MB). CLI: text or `-f file`, `-o out.mp3`, `-v voice`, `--rate/--volume`, `--play`, `--list [filter]`, `--json`.
+- Antigravity picks it up as skill `~/.gemini/config/skills/edge-tts-voice/` (SKILL.md + `scripts/tts.py` copy), and `~/.gemini/config/GEMINI.md` carries the global rule pointing at it.
+- The script self-heals: if the running interpreter lacks `edge_tts` it probes candidate venvs and delegates via `subprocess.run` (never `os.execv` — execv under MSYS swallows the child's stdout and exit code), else bootstraps a venv with `uv`.
+- Antigravity only rescans skills/GEMINI.md at startup → restart the IDE after editing them.
+
 ## Teaching another agent (another host/profile) to use this
 
 `edge` needs **no API key** — it is Microsoft's free read-aloud endpoint. Nothing to buy, nothing to paste; only two things per host: the `edge-tts` package inside the Hermes runtime venv, and `tts.provider/tts.edge.voice` in that host's config. The venv is shared by every profile on the host; the config is per profile.
