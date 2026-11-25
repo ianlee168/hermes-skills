@@ -49,6 +49,7 @@
 | `cartoon-story-video/` | 50.110 Windows bot | 段子/故事→卡通小视频的纯本地流水线（edge-tts 旁白 + PIL 逐帧矢量卡通 + ffmpeg 编码/配乐/响度归一）；无生图 API 依赖，换故事只改台词与场景 painter |
 | `4-SKILLS-USAGE.md` | **所有人** 共同管 | 通用操作上下文，零硬编 |
 | `windows-fan-rpm-telemetry/` | 50.110 Windows bot | 读真实风扇 RPM/温度（替代 HWiNFO 免费版 12h 共享内存上限）：LibreHardwareMonitor 便携版 + `data.json` HTTP 端点；**设置文件是 `LibreHardwareMonitor.config`（不是 `.exe.config`）**、`netstat` 显示 PID 4 属正常（http.sys）、风扇通道靠短时 CPU 负载相关法映射 |
+| `hermes-tts-setup/` | 50.110 Windows bot（50.161 已装同 skill） | Hermes TTS（`text_to_speech`）配声与排障：edge 免费免 key、晓萱 `zh-CN-XiaoxuanNeural`、`edge-tts` 必须装进运行时 venv（uv venv 无 pip 要先 `ensurepip`）、`hermes config set` 只写**当前 profile** 的 config |
 
 ## 称呼约定（陛下 2026-09-22 定，两边共用）
 
@@ -153,6 +154,7 @@ git push origin main
 | `windows-fan-rpm-telemetry/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-port-squat-popup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `hermes-tts-setup/*` | 50.110 Windows bot（如有） | 50.161 不审（该机已装同 skill 可直接用） |
 | `crawl4ai/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `sp500-etf-premium-monitor/*` | 50.110 Windows bot（创建） | 50.161 按 references/migrate-to-50161.md 执行迁移后接管 |
 | `cloudflare-d1-row-read-blowup/*` | 50.110 Windows bot（如有） | 50.161 不审 |
