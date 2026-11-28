@@ -73,8 +73,12 @@ git diff > /c/Users/ianle/AppData/Local/hermes/patches/local-core-patches-$(date
 ## 让运行中的 gateway 加载补丁
 
 改完不重启 = 白改（进程跑的是旧字节码）。**`hermes gateway restart` / `taskkill` 会被
-`tools/code_execution_lifecycle.py` 的文本守卫拦掉**（按命令文本匹配，不判断你是不是真在
-gateway 进程里），报 `cannot restart ... from inside the gateway process`。
+`tools/code_execution_lifecycle.py` 的文本守卫拦掉**，报 `cannot restart ... from inside the
+gateway process` —— 这条守卫是**对的**，不是误报：50.110 桌面端聊天跑在 gateway 的 `local`
+平台上（`gateway_state.json` / `logs/gateway.log` 里的 `local-<hash>` 会话就是它）。实测：我杀了
+gateway 后正在跑的那一轮直接断在 tool 边界，日志留 `Native session startup recovery
+local-…: not_found` 与 `paused: unknown_execution`。所以：要么等这一轮结束、要么接受断轮，
+不要以为“查过父进程 PID 就安全”。
 
 可行路径：让 Task Scheduler 这个「进程树外」的兄弟去干。
 
@@ -87,7 +91,8 @@ schtasks /Delete /TN HermesGatewayRestartOnce /F     # 用完删掉
 ```
 
 只 `schtasks /End` 不够：交互式登录的 Hermes_Gateway 任务 End 掉的是任务壳，python 还活着，
-随后 `/Run` 因为锁被占直接退出（实测：End 报成功、PID 不变）。必须先杀 python 再 `/Run`。
+随后 `/Run` 因为锁被占直接退出（实测：End 报成功、PID 不变）。必须先杀 python 再 `/Run` ——
+代价就是当前这轮对话会被切断（见上一条），所以挑没人在用的时间点做。
 
 验加载成功（不靠脑测）：
 
