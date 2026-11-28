@@ -17,6 +17,7 @@
 | `istoreos-istore-package-ops/` | 50.110 Windows bot | iStoreX 商店升级报 file_clash / opkg 装不上商店包的处理，路由器专属 |
 | `skill-github-mirror/` | 50.110 Windows bot | skill→GitHub 同步流程，所有 bot 适用 |
 | `hermes-update-troubleshooting/` | 50.110 Windows bot | Hermes 自更新故障排查（含 ZIP fallback 清构建产物坑；**Windows 端 fetch 反复超时/124 的真因 = schannel TLS 后端慢 43×，`http.sslBackend=openssl` 治本**） |
+| `hermes-local-core-patches/` | 50.110 Windows bot | Hermes 本地核心补丁（weixin channel_prompts + 会话过期 5s、cron strict 扫描先剥 Markdown 代码块）：`update` 后如何验/重打/重启 gateway 加载 |
 | `stock-footage-keywording/` | 50.110 Windows bot | 卖家侧素材上架关键词（通用，非本机专属） |
 | `crawl4ai/` | 50.110 Windows bot | LLM 友好爬虫 crawl4ai:评估结论、安装、抽取策略、反爬实话（通用） |
 | `unraid-server-ops/` | 50.110 Windows bot | Unraid(50.1) 运维大全:user scripts / VM 救援 / docker 权限 / 插件盘点 / 备份路线;IP 保留,凭证只在 gbrain |
@@ -151,6 +152,7 @@ git push origin main
 | `skill-github-mirror/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `tool-maintenance/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `hermes-update-troubleshooting/*` | 50.110 Windows bot（如有） | 50.161 不审 |
+| `hermes-local-core-patches/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-fan-rpm-telemetry/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `stock-footage-keywording/*` | 50.110 Windows bot（如有） | 50.161 不审 |
 | `windows-port-squat-popup/*` | 50.110 Windows bot（如有） | 50.161 不审 |

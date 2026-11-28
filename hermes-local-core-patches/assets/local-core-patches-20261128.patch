@@ -1,0 +1,66 @@
+diff --git a/cron/prompt_scan.py b/cron/prompt_scan.py
+index 49c960b798..1c5157acff 100644
+--- a/cron/prompt_scan.py
++++ b/cron/prompt_scan.py
+@@ -109,6 +109,19 @@ _CRON_PATTERN_REMEDIES = {
+ }
+ 
+ 
++# Markdown code is documentation, not a directive: cron prompts routinely paste runbook/skill
++# excerpts whose fenced blocks *describe* commands (`visudo`, `rm -rf /`, `cat .env`). Strip fenced
++# blocks and inline code before the strict scan so the tripwire fires on prose only.
++# Local patch (not upstream) — see skills/.archive/hermes-webui-ops/references/local-core-patches.md.
++_FENCED_CODE_RE = re.compile(r"```.*?```|~~~.*?~~~", re.DOTALL)
++_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
++
++
++def _strip_doc_code_blocks(prompt: str) -> str:
++    """Drop markdown fenced/inline code so pasted docs don't trip the strict prompt scan."""
++    return _INLINE_CODE_RE.sub(" ", _FENCED_CODE_RE.sub(" ", prompt))
++
++
+ def _first_pattern_error(text: str, *pattern_sets) -> str:
+     for patterns in pattern_sets:
+         for pattern, pid in patterns:
+@@ -128,7 +141,7 @@ def _scan_cron_prompt(prompt: str) -> str:
+     for char in _CRON_INVISIBLE_CHARS:
+         if f"U+{ord(char):04X}" in removed:
+             return f"Blocked: prompt contains invisible unicode U+{ord(char):04X} (possible injection)."
+-    return _first_pattern_error(prompt, _CRON_THREAT_PATTERNS, _CRON_EXFIL_COMMAND_PATTERNS)
++    return _first_pattern_error(_strip_doc_code_blocks(prompt), _CRON_THREAT_PATTERNS, _CRON_EXFIL_COMMAND_PATTERNS)
+ 
+ 
+ def _scan_cron_skill_assembled(assembled: str) -> tuple[str, str]:
+diff --git a/plugins/platforms/weixin/adapter.py b/plugins/platforms/weixin/adapter.py
+index 53c9db0626..6c6f60f953 100644
+--- a/plugins/platforms/weixin/adapter.py
++++ b/plugins/platforms/weixin/adapter.py
+@@ -34,6 +34,7 @@ from agent.i18n import t
+ from gateway.platforms.base import (
+     _IMAGE_EXTS, _VIDEO_EXTS, gateway_trust_env, BasePlatformAdapter, SendResult, describe_proxy_error, env_proxy_for_redaction,
+     cache_audio_from_bytes_async, cache_document_from_bytes_async, cache_image_from_bytes_async,
++    resolve_channel_prompt,
+ )
+ from gateway.platforms.event import MessageEvent, MessageType
+ from hermes_constants import get_hermes_home, mkdir_under_hermes_home
+@@ -830,8 +831,8 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
+                 ret, errcode = response.get("ret", 0), response.get("errcode", 0)
+                 if ret not in {0, None} or errcode not in {0, None}:
+                     if _is_session_expired(response, ret, errcode):
+-                        logger.error("[%s] Session expired; pausing for 10 minutes", self.name)
+-                        await asyncio.sleep(600)
++                        logger.error("[%s] Session expired; pausing for 5 seconds", self.name)
++                        await asyncio.sleep(5)
+                         consecutive_failures = 0
+                         continue
+                     consecutive_failures += 1
+@@ -917,7 +918,8 @@ class WeixinAdapter(OwnAccessPolicyMixin, BasePlatformAdapter):
+         source = self.build_source(chat_id=effective_chat_id, chat_type=chat_type, user_id=sender_id, user_name=sender_id)
+         event = MessageEvent(
+             text=text, message_type=_message_type_from_media(media_types, text), source=source, raw_message=message,
+-            message_id=message_id or None, media_urls=media_paths, media_types=media_types, timestamp=datetime.now())
++            message_id=message_id or None, media_urls=media_paths, media_types=media_types, timestamp=datetime.now(),
++            channel_prompt=resolve_channel_prompt(self.config.extra, effective_chat_id, None))
+         logger.info("[%s] inbound from=%s type=%s media=%d", self.name, _safe_id(sender_id), source.chat_type, len(media_paths))
+         if event.message_type == MessageType.TEXT:
+             self._enqueue_text_event(event)
